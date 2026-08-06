@@ -4,7 +4,7 @@ import {
   LayoutDashboard, List, User, Plus, Inbox, UserCheck, Calendar,
   Package, Building2, Calculator, SlidersHorizontal, BarChart3,
   DollarSign, MessageCircle, Image, Rss, Bell, LogOut, ChevronLeft,
-  Menu, Camera, X,
+  Menu, Camera, X, FileText,
 } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { uploadAvatar } from '../services/appUsers'
@@ -38,6 +38,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/configuracoes-calculadora': 'Config. da Calculadora',
   '/relatorios': 'Relatórios',
   '/relatorios/financeiro': 'Relatório financeiro',
+  '/relatorios/mensal': 'Relatório mensal',
 }
 
 function SidebarNavItem({
@@ -159,6 +160,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     { to: '/configuracoes-calculadora', icon: SlidersHorizontal, label: 'Config. Calculadora' },
     { to: '/relatorios', icon: BarChart3, label: 'Relatórios' },
     { to: '/relatorios/financeiro', icon: DollarSign, label: 'Financeiro' },
+    { to: '/relatorios/mensal', icon: FileText, label: 'Relatório mensal' },
   ]
 
   const closeMobile = () => setMobileOpen(false)

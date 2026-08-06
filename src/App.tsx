@@ -11,6 +11,7 @@ import { AtribuirResponsavelPage } from './screens/AtribuirResponsavelPage'
 import { ReadyGalleryPage } from './screens/ReadyGalleryPage'
 import { ReportsPage } from './screens/ReportsPage'
 import { FinancialReportsPage } from './screens/FinancialReportsPage'
+import { RelatorioMensalPage } from './screens/RelatorioMensalPage'
 import { SolicitarPage } from './screens/SolicitarPage'
 import { WhatsAppDemandsPage } from './screens/WhatsAppDemandsPage'
 import { FeedPage } from './screens/FeedPage'
@@ -133,6 +134,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <FinancialReportsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/relatorios/mensal"
+            element={
+              <ProtectedRoute>
+                <RelatorioMensalPage />
               </ProtectedRoute>
             }
           />
