@@ -47,7 +47,7 @@ function limitesDoMes(mes: string): { inicio: string; fim: string; label: string
   return { inicio, fim, label: label.charAt(0).toUpperCase() + label.slice(1) }
 }
 
-const COLS = ['Data', 'Solicitante', 'Descrição', 'Status', 'Valor', 'Pagamento'] as const
+const COLS = ['Data', 'Solicitante', 'Demanda', 'Status', 'Valor', 'Pagamento'] as const
 
 function exportXLS(tickets: Ticket[], mesLabel: string) {
   const BOM = '﻿'
@@ -57,7 +57,7 @@ function exportXLS(tickets: Ticket[], mesLabel: string) {
     return [
       formatarData(t.data_criacao),
       t.solicitante_nome,
-      t.descricao || t.titulo,
+      t.titulo,
       STATUS_LABELS[t.status],
       formatarMoeda(getValor(t)),
       pag.label,
@@ -357,7 +357,7 @@ export function RelatorioMensalPage() {
                         <tr key={t.id}>
                           <td>{formatarData(t.data_criacao)}</td>
                           <td>{t.solicitante_nome}</td>
-                          <td>{t.descricao || t.titulo}</td>
+                          <td>{t.titulo}</td>
                           <td>{STATUS_LABELS[t.status]}</td>
                           <td>{formatarMoeda(getValor(t))}</td>
                           <td>{pag.label}</td>
