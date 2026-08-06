@@ -4,11 +4,21 @@
  * Materiais e impressoras vêm do Supabase (Config. da Calculadora).
  */
 import { useEffect, useMemo, useState } from 'react'
-import { Settings2, Info, ChevronDown, ChevronUp, Download, Link as LinkIcon } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Settings2, Info, ChevronDown, ChevronUp, Download, Link as LinkIcon, Inbox, Check } from 'lucide-react'
+import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import { LayoutShell } from '../components/LayoutShell'
 import { formatarMoeda } from '../utils/formatters'
 import { listMateriais, listImpressoras, type Material, type Impressora } from '../services/calculadora'
+import { listTickets, vincularOrcamentoAoPedido } from '../services/tickets'
+import type { Ticket } from '../types/ticket'
+
+/** Status da caixa de entrada que ainda podem receber/atualizar um orçamento. */
+const PEDIDOS_INBOX_STATUSES: Ticket['status'][] = [
+  'recebida',
+  'orcamento_em_criacao',
+  'aguardando_aprovacao',
+  'enviado_cliente',
+]
 
 const FATORES = [
   { key: 'organico', label: 'Fator Orgânico', valor: 0.1, badge: '+10%', desc: 'Peças com geometria orgânica complexa' },
@@ -96,6 +106,15 @@ export function OrcamentoCalculadoraPage() {
   const [configAberta, setConfigAberta] = useState(false)
   const [gerando, setGerando] = useState(false)
 
+  // --- Vínculo com pedido da caixa de entrada ---
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const [pedidos, setPedidos] = useState<Ticket[]>([])
+  const [pedidoId, setPedidoId] = useState<string>(searchParams.get('pedido') ?? '')
+  const [vinculando, setVinculando] = useState(false)
+  const [vinculoOk, setVinculoOk] = useState<string | null>(null)
+  const [vinculoErro, setVinculoErro] = useState<string | null>(null)
+
   useEffect(() => {
     Promise.all([listMateriais(), listImpressoras()])
       .then(([m, i]) => {
@@ -111,6 +130,17 @@ export function OrcamentoCalculadoraPage() {
       .finally(() => setCarregado(true))
   }, [])
 
+  useEffect(() => {
+    listTickets({ statusIn: PEDIDOS_INBOX_STATUSES }, { limit: 500 })
+      .then((r) => setPedidos(r.tickets))
+      .catch(() => {})
+  }, [])
+
+  const pedidoSelecionado = useMemo(
+    () => pedidos.find((p) => p.id === pedidoId) ?? null,
+    [pedidos, pedidoId],
+  )
+
   const materiaisMap = useMemo(() => Object.fromEntries(materiais.map((m) => [m.nome, m.precoPorKg])), [materiais])
   const impressorasMap = useMemo(
     () => Object.fromEntries(impressoras.map((i) => [i.nome, { manutH: i.manutH, potW: i.potW }])),
@@ -122,6 +152,38 @@ export function OrcamentoCalculadoraPage() {
   const upd = <K extends keyof Inputs>(k: K, v: Inputs[K]) => setInp((prev) => ({ ...prev, [k]: v }))
   const toggleFator = (key: string) =>
     setInp((prev) => ({ ...prev, fatores: { ...prev.fatores, [key]: !prev.fatores[key] } }))
+
+  const vincularAoPedido = async () => {
+    if (!pedidoSelecionado || calc.precoFinal < 0) return
+    setVinculando(true)
+    setVinculoOk(null)
+    setVinculoErro(null)
+    try {
+      await vincularOrcamentoAoPedido(
+        pedidoSelecionado.id,
+        {
+          preco_por_peca: Number(calc.precoUnitario.toFixed(2)),
+          quantidade_orcamento: Math.max(1, inp.quantidadePecas),
+          total_orcamento: Number(calc.precoFinal.toFixed(2)),
+          observacoes_orcamento: inp.descAdicional || null,
+          avancarFase: true,
+        },
+        pedidoSelecionado.status,
+      )
+      setVinculoOk(
+        `Orçamento de ${formatarMoeda(calc.precoFinal)} vinculado ao pedido "${pedidoSelecionado.titulo}".`,
+      )
+      // Remove o pedido da lista (já tem orçamento; fase avançou).
+      setPedidos((prev) => prev.filter((p) => p.id !== pedidoSelecionado.id))
+      setPedidoId('')
+    } catch (err) {
+      setVinculoErro(
+        err instanceof Error ? err.message : 'Erro ao vincular orçamento ao pedido.',
+      )
+    } finally {
+      setVinculando(false)
+    }
+  }
 
   const baixarPDF = async () => {
     setGerando(true)
@@ -318,6 +380,74 @@ export function OrcamentoCalculadoraPage() {
           </div>
         )}
 
+        {/* Vínculo com pedido da caixa de entrada */}
+        <div className="ctp-card" style={{ padding: '1rem 1.125rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+            <Inbox size={15} color="var(--ctp-navy)" />
+            <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+              Vincular a um pedido da caixa de entrada
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '0.75rem' }}>
+            <div style={{ flex: '1 1 320px', minWidth: '240px' }}>
+              <label style={LS}>Pedido</label>
+              <select
+                className="ctp-input"
+                style={{ fontSize: '13px' }}
+                value={pedidoId}
+                onChange={(e) => {
+                  setPedidoId(e.target.value)
+                  setVinculoOk(null)
+                  setVinculoErro(null)
+                }}
+              >
+                <option value="">Nenhum (orçamento avulso)</option>
+                {pedidos.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.titulo} — {p.solicitante_nome}
+                    {p.orcamento ? ` (orçamento atual ${formatarMoeda(p.orcamento.total)})` : ''}
+                  </option>
+                ))}
+              </select>
+              <p style={HNTS}>
+                Ao vincular, o orçamento calculado é gravado no pedido e a fase avança
+                para “Esperando aprovação (Pedro)”.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={vincularAoPedido}
+              disabled={!pedidoId || vinculando || calc.precoFinal < 0}
+              className="btn btn-primary"
+              style={{ gap: '6px', flexShrink: 0 }}
+            >
+              <LinkIcon size={14} />
+              {vinculando ? 'Vinculando…' : 'Vincular orçamento ao pedido'}
+            </button>
+          </div>
+          {pedidoSelecionado && (
+            <button
+              type="button"
+              onClick={() => navigate(`/demandas/${pedidoSelecionado.id}`)}
+              className="mt-2 inline-flex items-center gap-1 text-[12px] font-semibold"
+              style={{ color: 'var(--ctp-navy)' }}
+            >
+              Abrir pedido “{pedidoSelecionado.titulo}”
+            </button>
+          )}
+          {vinculoOk && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[13px] text-emerald-800">
+              <Check size={15} style={{ flexShrink: 0, marginTop: '1px' }} />
+              <span>{vinculoOk}</span>
+            </div>
+          )}
+          {vinculoErro && (
+            <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[13px] text-rose-800">
+              {vinculoErro}
+            </div>
+          )}
+        </div>
+
         <div className="ctp-card" style={{ overflow: 'hidden' }}>
           <div style={{ display: 'flex', minHeight: 0, flexWrap: 'wrap' }}>
             {/* LEFT: inputs */}
@@ -481,7 +611,7 @@ export function OrcamentoCalculadoraPage() {
                 </p>
               </div>
 
-              <button onClick={baixarPDF} disabled={gerando || calc.precoFinal <= 0} className="btn btn-lime" style={{ width: '100%', justifyContent: 'center', fontWeight: 800, fontSize: '13px', padding: '10px', gap: '6px' }}>
+              <button onClick={baixarPDF} disabled={gerando || calc.precoFinal < 0} className="btn btn-lime" style={{ width: '100%', justifyContent: 'center', fontWeight: 800, fontSize: '13px', padding: '10px', gap: '6px' }}>
                 <Download size={14} />
                 {gerando ? 'Gerando PDF…' : 'Baixar PDF do orçamento'}
               </button>

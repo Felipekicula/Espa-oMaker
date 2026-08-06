@@ -338,7 +338,8 @@ export function TicketListPage() {
             <option value="recebida">Recebida</option>
             <option value="em_analise">Em análise</option>
             <option value="orcamento_em_criacao">Orçamento em criação</option>
-            <option value="aguardando_aprovacao">Aguardando aprovação</option>
+            <option value="aguardando_aprovacao">Esperando aprovação (Pedro)</option>
+            <option value="enviado_cliente">Enviado ao cliente</option>
             <option value="aprovado">Aprovado</option>
             <option value="em_producao">Em produção</option>
             <option value="pos_processo">Pós-processo</option>

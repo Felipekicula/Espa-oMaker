@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Mail } from 'lucide-react'
 import { LayoutShell } from '../components/LayoutShell'
 import { TicketStatusPill } from '../components/TicketStatusPill'
 import { UserAvatar } from '../components/UserAvatar'
 import type { Ticket } from '../types/ticket'
 import { listTickets } from '../services/tickets'
+import { enviarResumoSemanal } from '../services/notificacoes'
 import { CATEGORIA_COR } from '../constants/ticketOptions'
+import { useAuth } from '../auth/AuthContext'
 
 const WEEKDAY_LABELS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
 const MONTH_NAMES = [
@@ -69,6 +72,39 @@ export function AgendaPage() {
   const [selectedYmd, setSelectedYmd] = useState<string | null>(() =>
     toLocalYMD(new Date()),
   )
+  const { appUser } = useAuth()
+  const [enviandoResumo, setEnviandoResumo] = useState(false)
+  const [resumoMsg, setResumoMsg] = useState<
+    { tipo: 'ok' | 'erro'; texto: string } | null
+  >(null)
+
+  const podeEnviarResumo = appUser?.role === 'felipe'
+
+  const handleEnviarResumo = async () => {
+    if (
+      !window.confirm(
+        'Enviar agora o resumo semanal de demandas por email para a chefe?',
+      )
+    ) {
+      return
+    }
+    try {
+      setEnviandoResumo(true)
+      setResumoMsg(null)
+      const r = await enviarResumoSemanal()
+      setResumoMsg({
+        tipo: 'ok',
+        texto: `Resumo enviado para ${r.enviadoPara.join(', ')} — ${r.totalAtrasadas} atrasada(s), ${r.totalSemana} nesta semana.`,
+      })
+    } catch (err) {
+      setResumoMsg({
+        tipo: 'erro',
+        texto: err instanceof Error ? err.message : 'Erro ao enviar o resumo.',
+      })
+    } finally {
+      setEnviandoResumo(false)
+    }
+  }
 
   const calendarCells = useMemo(() => buildMonthGrid(viewMonth), [viewMonth])
   const dataInicial = calendarCells[0]?.ymd ?? toLocalYMD(viewMonth)
@@ -140,6 +176,18 @@ export function AgendaPage() {
             <p>Calendário mensal com prazos de entrega das demandas.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {podeEnviarResumo && (
+              <button
+                type="button"
+                onClick={handleEnviarResumo}
+                disabled={enviandoResumo}
+                className="btn btn-primary btn-sm"
+                style={{ gap: '6px' }}
+              >
+                <Mail size={14} />
+                {enviandoResumo ? 'Enviando…' : 'Enviar resumo semanal'}
+              </button>
+            )}
             <button type="button" onClick={goPrevMonth} className="btn btn-outline btn-sm" aria-label="Mês anterior">
               ←
             </button>
@@ -151,6 +199,18 @@ export function AgendaPage() {
             </button>
           </div>
         </header>
+
+        {resumoMsg && (
+          <div
+            className={
+              resumoMsg.tipo === 'ok'
+                ? 'rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800'
+                : 'rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800'
+            }
+          >
+            {resumoMsg.texto}
+          </div>
+        )}
 
         <p className="text-sm font-semibold" style={{ color: 'var(--ctp-navy)' }}>{monthLabel}</p>
 

@@ -249,7 +249,12 @@ export async function getTriagemUnreadCount(sinceDate: string): Promise<number> 
     .from('tickets')
     .select('id', { count: 'exact', head: true })
     .is('excluida_em', null)
-    .in('status', ['recebida', 'orcamento_em_criacao', 'aguardando_aprovacao'])
+    .in('status', [
+      'recebida',
+      'orcamento_em_criacao',
+      'aguardando_aprovacao',
+      'enviado_cliente',
+    ])
     .gt('data_criacao', sinceDate)
 
   if (error) return 0
@@ -678,6 +683,61 @@ export async function updateTicketOrcamento(
     throw error
   }
 
+  return mapRowToTicket(data)
+}
+
+export interface VincularOrcamentoInput {
+  /** Preço unitário calculado (por peça). */
+  preco_por_peca: number
+  /** Quantidade total de peças do orçamento. */
+  quantidade_orcamento: number
+  /** Total do orçamento (preço final da calculadora). */
+  total_orcamento: number
+  observacoes_orcamento?: string | null
+  /**
+   * Se true, avança a demanda para "Esperando aprovação (Pedro)"
+   * (status = aguardando_aprovacao). Se a demanda já estiver numa fase
+   * posterior, o status não é rebaixado.
+   */
+  avancarFase?: boolean
+}
+
+/**
+ * Vincula o orçamento gerado na calculadora a um pedido da caixa de entrada.
+ * Grava os valores de orçamento no ticket e, opcionalmente, avança a fase.
+ */
+export async function vincularOrcamentoAoPedido(
+  id: string,
+  input: VincularOrcamentoInput,
+  /** Status atual da demanda (para não rebaixar a fase). */
+  statusAtual?: TicketStatus,
+): Promise<Ticket> {
+  const updatePayload: Record<string, unknown> = {
+    preco_por_peca: input.preco_por_peca,
+    quantidade_orcamento: input.quantidade_orcamento,
+    total_orcamento: input.total_orcamento,
+    status_orcamento: 'aguardando_aprovacao',
+    observacoes_orcamento: input.observacoes_orcamento ?? null,
+    valor_demanda: input.total_orcamento,
+  }
+
+  // Fases anteriores à "esperando aprovação" — só nelas faz sentido avançar.
+  const fasesIniciais: TicketStatus[] = ['recebida', 'orcamento_em_criacao']
+  if (
+    input.avancarFase &&
+    (!statusAtual || fasesIniciais.includes(statusAtual))
+  ) {
+    updatePayload.status = 'aguardando_aprovacao'
+  }
+
+  const { data, error } = await supabase
+    .from('tickets')
+    .update(updatePayload)
+    .eq('id', id)
+    .select(TICKET_SELECT_WITH_RESPONSAVEL)
+    .single()
+
+  if (error) throw error
   return mapRowToTicket(data)
 }
 
@@ -1232,8 +1292,10 @@ function mapRowToTicket(row: any): Ticket {
         }
       : undefined
 
+  // Considera orçamento lançado quando os campos existem (não-nulos),
+  // inclusive quando o valor é 0 (cortesia / sem cobrança).
   const orcamento =
-    row.preco_por_peca && row.quantidade_orcamento
+    row.preco_por_peca != null && row.quantidade_orcamento != null
       ? {
           preco_por_peca: Number(row.preco_por_peca),
           quantidade: Number(row.quantidade_orcamento),

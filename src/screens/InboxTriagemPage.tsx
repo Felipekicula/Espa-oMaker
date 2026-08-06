@@ -1,18 +1,28 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Inbox } from 'lucide-react'
+import { Inbox, Calculator } from 'lucide-react'
 import { LayoutShell } from '../components/LayoutShell'
 import { TicketStatusPill } from '../components/TicketStatusPill'
 import type { Ticket } from '../types/ticket'
 import { listTickets, updateTicketStatus } from '../services/tickets'
+import { formatarMoeda } from '../utils/formatters'
 import { useAuth } from '../auth/AuthContext'
 
 const FASE_ORCAMENTO: { value: Ticket['status']; label: string }[] = [
   { value: 'recebida', label: 'Recebida' },
   { value: 'orcamento_em_criacao', label: 'Orçamento em criação' },
-  { value: 'aguardando_aprovacao', label: 'Aguardando aprovação' },
+  { value: 'aguardando_aprovacao', label: 'Esperando aprovação (Pedro)' },
+  { value: 'enviado_cliente', label: 'Enviado ao cliente' },
   { value: 'aprovado', label: 'Orçamento aprovado → definir responsável' },
   { value: 'cancelada', label: 'Cancelar demanda' },
+]
+
+/** Status que ainda estão no fluxo da caixa de entrada (workflow de orçamento). */
+const INBOX_STATUSES: Ticket['status'][] = [
+  'recebida',
+  'orcamento_em_criacao',
+  'aguardando_aprovacao',
+  'enviado_cliente',
 ]
 
 export function InboxTriagemPage() {
@@ -32,7 +42,7 @@ export function InboxTriagemPage() {
       setLoading(true)
       setError(null)
       const ticketsResult = await listTickets(
-        { statusIn: ['recebida', 'orcamento_em_criacao', 'aguardando_aprovacao'] },
+        { statusIn: INBOX_STATUSES },
         { limit: 500 },
       )
       setTickets(ticketsResult.tickets)
@@ -206,6 +216,26 @@ export function InboxTriagemPage() {
                     <p className="mt-1 text-[13px]" style={{ color: 'var(--text-muted)' }}>
                       {ticket.solicitante_nome}
                     </p>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      {ticket.orcamento ? (
+                        <span className="text-[12px] font-semibold" style={{ color: 'var(--ctp-navy)' }}>
+                          Orçamento: {formatarMoeda(ticket.orcamento.total)}
+                        </span>
+                      ) : (
+                        <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
+                          Sem orçamento
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/orcamento?pedido=${ticket.id}`)}
+                        className="inline-flex items-center gap-1 text-[12px] font-semibold transition-colors"
+                        style={{ color: 'var(--ctp-navy)' }}
+                      >
+                        <Calculator size={12} />
+                        {ticket.orcamento ? 'Refazer orçamento' : 'Criar orçamento'}
+                      </button>
+                    </div>
                   </div>
                   <div className="flex flex-col gap-1 sm:items-end">
                     <label className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>

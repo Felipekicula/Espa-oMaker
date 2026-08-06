@@ -43,6 +43,7 @@ create table if not exists public.tickets (
       'em_analise',
       'orcamento_em_criacao',
       'aguardando_aprovacao',
+      'enviado_cliente',
       'aprovado',
       'em_producao',
       'pos_processo',

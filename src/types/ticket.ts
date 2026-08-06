@@ -21,6 +21,7 @@ export type TicketStatus =
   | 'em_analise'
   | 'orcamento_em_criacao'
   | 'aguardando_aprovacao'
+  | 'enviado_cliente'
   | 'aprovado'
   | 'em_producao'
   | 'pos_processo'

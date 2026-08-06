@@ -78,7 +78,10 @@ export function DashboardPage() {
       t.status === 'orcamento_em_criacao',
   ).length
   const aguardando = tickets.filter(
-    (t) => t.status === 'aguardando_aprovacao' || t.status === 'aprovado',
+    (t) =>
+      t.status === 'aguardando_aprovacao' ||
+      t.status === 'enviado_cliente' ||
+      t.status === 'aprovado',
   ).length
   const emProducao = tickets.filter(
     (t) => t.status === 'em_producao' || t.status === 'pos_processo',
@@ -99,6 +102,7 @@ export function DashboardPage() {
       t.status !== 'entregue' &&
       t.status !== 'cancelada' &&
       (t.status === 'aguardando_aprovacao' ||
+        t.status === 'enviado_cliente' ||
         t.status === 'aprovado' ||
         t.status === 'em_producao' ||
         t.status === 'pos_processo' ||
@@ -291,7 +295,7 @@ export function DashboardPage() {
                 description="Orçamentos aguardando retorno."
                 value={aguardando}
                 tone="warning"
-                to="/demandas?status=aguardando_aprovacao"
+                to="/demandas?status=aguardando_aprovacao,enviado_cliente,aprovado"
               />
             </div>
           </div>

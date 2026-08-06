@@ -52,7 +52,8 @@ const STATUS_LABELS: Record<TicketStatus, string> = {
   recebida: 'Recebida',
   em_analise: 'Em análise',
   orcamento_em_criacao: 'Orçamento em criação',
-  aguardando_aprovacao: 'Aguardando aprovação de orçamento',
+  aguardando_aprovacao: 'Esperando aprovação (Pedro)',
+  enviado_cliente: 'Enviado ao cliente',
   aprovado: 'Orçamento aprovado',
   em_producao: 'Em produção',
   pos_processo: 'Pós-processo',
@@ -1634,7 +1635,10 @@ export function TicketDetailPage() {
                           Orçamento em criação
                         </option>
                         <option value="aguardando_aprovacao">
-                          Aguardando aprovação de orçamento
+                          Esperando aprovação (Pedro)
+                        </option>
+                        <option value="enviado_cliente">
+                          Enviado ao cliente
                         </option>
                         <option value="aprovado">Orçamento aprovado</option>
                         <option value="em_producao">Em produção</option>
