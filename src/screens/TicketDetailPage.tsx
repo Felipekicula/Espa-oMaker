@@ -595,6 +595,7 @@ export function TicketDetailPage() {
             <p className="mt-1 text-sm text-slate-500">
               {ticket.solicitante_nome}{' '}
               {ticket.tipo === 'externa' ? '· Externa' : '· Interna'}
+              {ticket.registrado_por && <> · Registrado por {ticket.registrado_por}</>}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">

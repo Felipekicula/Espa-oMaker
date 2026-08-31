@@ -96,6 +96,11 @@ export function WhatsAppDemandsPage() {
                       {t.solicitante_telefone}
                     </span>
                   )}
+                  {t.registrado_por && (
+                    <span className="mt-0.5 block text-xs" style={{ color: 'var(--ctp-navy)' }}>
+                      Registrado por {t.registrado_por}
+                    </span>
+                  )}
                 </td>
                 <td className="px-4 py-3">
                   <TicketStatusPill status={t.status} />

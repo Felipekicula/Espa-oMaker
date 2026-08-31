@@ -110,7 +110,8 @@ const TICKETS_SELECT_EXTENDED = `
   receita_recorrente,
   receita_recorrente_dia_pagamento,
   receita_recorrente_inicio,
-  receita_recorrente_fim
+  receita_recorrente_fim,
+  registrado_por
 `
 
 export async function listTickets(
@@ -311,6 +312,8 @@ export interface CreateTicketInput {
   origem?: TicketOrigem
   solicitante_nome: string
   solicitante_telefone?: string
+  /** Quem registrou a demanda no formulário público (ex.: Bianca, Dani) — não é o solicitante. */
+  registrado_por?: string
   categoria: TicketCategoria
   prioridade: TicketPrioridade
   data_entrega?: string
@@ -348,6 +351,8 @@ export async function createTicket(input: CreateTicketInput): Promise<Ticket> {
       origem: input.origem ?? 'interno',
       solicitante_nome: input.solicitante_nome,
       solicitante_telefone: input.solicitante_telefone,
+      // Campo novo: não força default para manter compatibilidade com bancos antigos.
+      ...(input.registrado_por !== undefined ? { registrado_por: input.registrado_por } : {}),
       categoria: input.categoria,
       prioridade: input.prioridade,
       data_entrega: input.data_entrega ?? null,
@@ -1316,6 +1321,7 @@ function mapRowToTicket(row: any): Ticket {
     origem: (row.origem ?? 'interno') as TicketOrigem,
     solicitante_nome: row.solicitante_nome,
     solicitante_telefone: row.solicitante_telefone ?? null,
+    registrado_por: row.registrado_por ?? null,
     categoria: row.categoria,
     prioridade: row.prioridade,
     status: row.status,

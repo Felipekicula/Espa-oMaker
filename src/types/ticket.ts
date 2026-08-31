@@ -58,6 +58,8 @@ export interface Ticket {
   origem: TicketOrigem
   solicitante_nome: string
   solicitante_telefone?: string | null
+  /** Quem registrou a demanda no formulário público (ex.: Bianca, Dani) — não é o solicitante. */
+  registrado_por?: string | null
   categoria: TicketCategoria
   prioridade: TicketPrioridade
   status: TicketStatus

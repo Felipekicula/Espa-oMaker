@@ -10,12 +10,14 @@ import logoCtp from '../assets/logo-ctp.svg'
 const MAX_IMAGENS = 5
 const MAX_ARQUIVOS_3D = 5
 const EXTENSÕES_3D = '.stl,.3mf,.zip,.rar,.7z'
+const REGISTRADO_POR_OPCOES = ['Bianca', 'Dani'] as const
 
 export function SolicitarPage() {
   const [titulo, setTitulo] = useState('')
   const [descricao, setDescricao] = useState('')
   const [solicitanteNome, setSolicitanteNome] = useState('')
   const [solicitanteTelefone, setSolicitanteTelefone] = useState('')
+  const [registradoPor, setRegistradoPor] = useState('')
   const [categoria, setCategoria] = useState<TicketCategoria>('servicos_3d')
   const [valor, setValor] = useState<number | ''>('')
   const [material, setMaterial] = useState<string>('PLA')
@@ -73,6 +75,7 @@ export function SolicitarPage() {
         origem: 'formulario',
         solicitante_nome: solicitanteNome,
         solicitante_telefone: solicitanteTelefone || undefined,
+        registrado_por: registradoPor || undefined,
         categoria,
         prioridade: 'media',
         valor_demanda: valor !== '' ? Number(valor) : undefined,
@@ -173,6 +176,24 @@ export function SolicitarPage() {
           </p>
 
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+            <div className="rounded-lg p-3" style={{ background: 'var(--bg-muted)', border: '1px solid var(--border-default)' }}>
+              <label className={labelClass}>Você está preenchendo em nome de alguém (WhatsApp, telefone etc.)?</label>
+              <select
+                value={registradoPor}
+                onChange={(e) => setRegistradoPor(e.target.value)}
+                className={inputClass}
+              >
+                <option value="">Não — o próprio cliente está preenchendo</option>
+                {REGISTRADO_POR_OPCOES.map((nome) => (
+                  <option key={nome} value={nome}>
+                    Sim, sou {nome}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                Se selecionar, preencha os dados abaixo com as informações do <strong>cliente</strong>, não os seus.
+              </p>
+            </div>
             <div>
               <label className={labelClass}>Título da solicitação *</label>
               <input
