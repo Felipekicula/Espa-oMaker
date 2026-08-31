@@ -5,7 +5,7 @@ import { FolderKanban, Wallet, PiggyBank, HeartHandshake } from 'lucide-react'
 import { LayoutShell } from '../components/LayoutShell'
 import { MetricCard } from '../components/MetricCard'
 import type { Ticket, TicketStatus } from '../types/ticket'
-import { listTickets } from '../services/tickets'
+import { listTickets, listTicketsPagosNoPeriodo } from '../services/tickets'
 import { formatarData, formatarMoeda } from '../utils/formatters'
 
 /** As 11 fases técnicas do sistema são resumidas nestas 8 categorias do relatório. */
@@ -48,17 +48,19 @@ function isParceria(t: Ticket): boolean {
 }
 
 /**
- * Na prática, uma demanda só entra em produção depois de pago pelo menos
- * 50% do orçamento — por isso o valor recebido é inferido pelo status,
- * sem precisar de um campo novo de "valor pago":
- *   Em produção/Pós-processo/Pronta ("Pedido em Execução") → 50%
- *   Entregue ("Pedido em Entregue") → 100%
- *   qualquer outro status → 0%
+ * Valor recebido, do sinal mais confiável para o mais fraco:
+ *   1) "Faturamento" marcado como pago (pagamento_pago_em, dado baixa manual
+ *      na demanda) → 100%, vale independente do status atual
+ *   2) Status Entregue → 100% (se ainda não tinha sido marcado o faturamento)
+ *   3) Já tem responsável definido → 50% (na prática só se define responsável
+ *      depois de pago pelo menos metade do orçamento)
+ *   4) Cancelada ou nenhum dos sinais acima → 0%
  */
 function getValorRecebido(t: Ticket): number {
+  if (t.status === 'cancelada') return 0
   const valor = getValor(t)
-  if (t.status === 'entregue') return valor
-  if (t.status === 'em_producao' || t.status === 'pos_processo' || t.status === 'pronta') return valor * 0.5
+  if (t.pagamento_pago_em || t.status === 'entregue') return valor
+  if (t.responsavel_id) return valor * 0.5
   return 0
 }
 
@@ -127,9 +129,12 @@ interface TotaisRelatorio {
 
 async function exportXLSX(
   tickets: Ticket[],
+  projetosParaTabela: Ticket[],
   totais: TotaisRelatorio,
   lojinha: number,
   mesLabel: string,
+  inicio: string,
+  fim: string,
 ) {
   const { default: ExcelJS } = await import('exceljs')
   const wb = new ExcelJS.Workbook()
@@ -164,7 +169,7 @@ async function exportXLSX(
   const kpiSubRow = 7
   const kpis: { label: string; value: number | string; numFmt?: string; sub: string; startCol: string; endCol: string }[] = [
     { label: 'Total de Projetos', value: totais.totalProjetos, sub: 'todos os projetos do mês', startCol: 'A', endCol: 'B' },
-    { label: 'Valor Total Recebido (R$)', value: totais.valorRecebido, numFmt: '#,##0.00', sub: 'Em Execução = 50% · Entregue = 100%', startCol: 'C', endCol: 'E' },
+    { label: 'Valor Total Recebido (R$)', value: totais.valorRecebido, numFmt: '#,##0.00', sub: 'Responsável = 50% · Faturamento pago/Entregue = 100%', startCol: 'C', endCol: 'E' },
     { label: 'Valor Total Orçado (R$)', value: totais.valorOrcado, numFmt: '#,##0.00', sub: 'demandas que abriram orçamento no mês', startCol: 'F', endCol: 'G' },
     { label: 'Parcerias (Valor = 0)', value: totais.totalParcerias, sub: 'orçamentos cortesia do mês', startCol: 'H', endCol: 'J' },
   ]
@@ -326,12 +331,14 @@ async function exportXLSX(
   ws.getRow(projColsRow).height = 26
 
   const firstDataRow = projColsRow + 1
-  tickets.forEach((t, i) => {
+  projetosParaTabela.forEach((t, i) => {
     const r = firstDataRow + i
     const bg = i % 2 === 0 ? X.white : X.rowAlt
     const valor = getValor(t)
     const recebido = getValorRecebido(t)
     const parceria = isParceria(t)
+    const dataCriacao = t.data_criacao.slice(0, 10)
+    const foraDoMes = dataCriacao < inicio || dataCriacao > fim
 
     const cData = ws.getCell(`A${r}`)
     cData.value = new Date(t.data_criacao)
@@ -349,8 +356,8 @@ async function exportXLSX(
     cCliente.border = borderAll
 
     const cProjeto = ws.getCell(`C${r}`)
-    cProjeto.value = t.titulo
-    cProjeto.font = { name: 'Arial', size: 10 }
+    cProjeto.value = foraDoMes ? `${t.titulo} (demanda de outro mês)` : t.titulo
+    cProjeto.font = { name: 'Arial', size: 10, italic: foraDoMes }
     cProjeto.alignment = { horizontal: 'left', vertical: 'middle' }
     fillCell(cProjeto, bg)
     cProjeto.border = borderAll
@@ -392,9 +399,9 @@ async function exportXLSX(
     ws.getRow(r).height = 16
   })
 
-  const lastDataRow = firstDataRow + tickets.length - 1
+  const lastDataRow = firstDataRow + projetosParaTabela.length - 1
   const totalRow = lastDataRow + 1
-  if (tickets.length > 0) {
+  if (projetosParaTabela.length > 0) {
     ws.mergeCells(`A${totalRow}:C${totalRow}`)
     const totalLabel = ws.getCell(`A${totalRow}`)
     totalLabel.value = 'Total'
@@ -403,8 +410,10 @@ async function exportXLSX(
     fillCell(totalLabel, X.tableHead)
     totalLabel.border = borderAll
 
+    // Soma direta (não fórmula): demandas de outro mês entram no Recebido mas
+    // não no Orçado, então uma soma simples de coluna não serviria para os dois.
     const totalOrcado = ws.getCell(`D${totalRow}`)
-    totalOrcado.value = { formula: `SUM(D${firstDataRow}:D${lastDataRow})` }
+    totalOrcado.value = totais.valorOrcado
     totalOrcado.numFmt = '#,##0.00'
     totalOrcado.font = { name: 'Arial', size: 10, bold: true }
     totalOrcado.alignment = { horizontal: 'right', vertical: 'middle' }
@@ -415,7 +424,7 @@ async function exportXLSX(
     ws.getCell(`E${totalRow}`).border = borderAll
 
     const totalRecebido = ws.getCell(`F${totalRow}`)
-    totalRecebido.value = { formula: `SUM(F${firstDataRow}:F${lastDataRow})` }
+    totalRecebido.value = totais.valorRecebido
     totalRecebido.numFmt = '#,##0.00'
     totalRecebido.font = { name: 'Arial', size: 10, bold: true }
     totalRecebido.alignment = { horizontal: 'right', vertical: 'middle' }
@@ -431,7 +440,7 @@ async function exportXLSX(
 
   // ---------- Parcerias ----------
   const parcerias = tickets.filter(isParceria)
-  const parcHeaderRow = (tickets.length > 0 ? totalRow : lastDataRow) + 2
+  const parcHeaderRow = (projetosParaTabela.length > 0 ? totalRow : lastDataRow) + 2
   ws.mergeCells(`A${parcHeaderRow}:J${parcHeaderRow}`)
   const parcTitle = ws.getCell(`A${parcHeaderRow}`)
   parcTitle.value = 'PARCERIAS — Projetos com Valor = R$ 0,00'
@@ -508,8 +517,10 @@ async function exportXLSX(
   ws.mergeCells(`A${obsRow}:J${obsRow}`)
   const obs = ws.getCell(`A${obsRow}`)
   obs.value =
-    'Valor Recebido é inferido pelo status (a produção só começa após pagar pelo menos 50%): ' +
-    '"Pedido em Execução" conta 50% do valor orçado, "Pedido em Entregue" conta 100%, os demais contam 0%.  •  ' +
+    'Valor Recebido: demanda com faturamento dado baixa como pago (ou status Entregue) conta 100% do valor orçado; ' +
+    'demanda com responsável definido (mas sem baixa de pagamento) conta 50%, pois só se define responsável depois de pago pelo menos metade; ' +
+    'sem nenhum dos dois sinais, ou cancelada, conta 0%.  •  ' +
+    'Marcadas "(demanda de outro mês)" foram criadas em outro mês, mas o pagamento foi confirmado agora — o valor conta no Recebido deste mês, mas não no Orçado.  •  ' +
     'Valor Total Orçado = soma de todas as demandas que abriram orçamento no mês, qualquer status.  •  ' +
     'Parceria = projetos com valor R$ 0,00 (orçamento cortesia).  •  ' +
     'Total Geral Recebido = Valor Total Recebido + Vendas da Lojinha CTP (célula amarela, manual).'
@@ -532,6 +543,7 @@ async function exportXLSX(
 export function RelatorioMensalPage() {
   const [mes, setMes] = useState(mesAtualStr())
   const [tickets, setTickets] = useState<Ticket[]>([])
+  const [pagamentosForaDoMes, setPagamentosForaDoMes] = useState<Ticket[]>([])
   const [lojinha, setLojinha] = useState<number>(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -543,11 +555,18 @@ export function RelatorioMensalPage() {
     try {
       setLoading(true)
       setError(null)
-      const { tickets: list } = await listTickets(
-        { dataCriacaoInicial: inicio, dataCriacaoFinal: fim },
-        { limit: 5000, orderBy: 'data_criacao', orderDirection: 'asc' },
-      )
+      const [{ tickets: list }, pagos] = await Promise.all([
+        listTickets(
+          { dataCriacaoInicial: inicio, dataCriacaoFinal: fim },
+          { limit: 5000, orderBy: 'data_criacao', orderDirection: 'asc' },
+        ),
+        listTicketsPagosNoPeriodo(inicio, fim),
+      ])
+      const idsDoMes = new Set(list.map((t) => t.id))
       setTickets(list)
+      // Demandas criadas em outro mês, mas cujo pagamento foi confirmado agora —
+      // o dinheiro entrou neste mês, então precisa contar no "Valor Recebido".
+      setPagamentosForaDoMes(pagos.filter((t) => !idsDoMes.has(t.id)))
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao carregar relatório mensal.'
       setError(message)
@@ -561,12 +580,23 @@ export function RelatorioMensalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mes])
 
+  const projetosParaTabela = useMemo(
+    () => [...tickets, ...pagamentosForaDoMes],
+    [tickets, pagamentosForaDoMes],
+  )
+
   const totais = useMemo<TotaisRelatorio>(() => {
     const valorOrcado = tickets.reduce((sum, t) => sum + getValor(t), 0)
-    const valorRecebido = tickets.reduce((sum, t) => sum + getValorRecebido(t), 0)
+    const valorRecebidoDoMes = tickets.reduce((sum, t) => sum + getValorRecebido(t), 0)
+    const valorRecebidoForaDoMes = pagamentosForaDoMes.reduce((sum, t) => sum + getValorRecebido(t), 0)
     const totalParcerias = tickets.filter(isParceria).length
-    return { totalProjetos: tickets.length, valorOrcado, valorRecebido, totalParcerias }
-  }, [tickets])
+    return {
+      totalProjetos: tickets.length,
+      valorOrcado,
+      valorRecebido: valorRecebidoDoMes + valorRecebidoForaDoMes,
+      totalParcerias,
+    }
+  }, [tickets, pagamentosForaDoMes])
 
   const totalGeralRecebido = totais.valorRecebido + lojinha
   const parcerias = useMemo(() => tickets.filter(isParceria), [tickets])
@@ -666,7 +696,7 @@ export function RelatorioMensalPage() {
           <div className="ml-auto flex gap-2">
             <button
               type="button"
-              onClick={() => void exportXLSX(tickets, totais, lojinha, mesLabel)}
+              onClick={() => void exportXLSX(tickets, projetosParaTabela, totais, lojinha, mesLabel, inicio, fim)}
               className="btn btn-outline btn-sm"
             >
               Exportar Excel
@@ -767,7 +797,10 @@ export function RelatorioMensalPage() {
                   <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                     Projetos de {mesLabel}
                   </p>
-                  <span className="text-xs text-slate-500">{tickets.length} projeto(s)</span>
+                  <span className="text-xs text-slate-500">
+                    {tickets.length} projeto(s)
+                    {pagamentosForaDoMes.length > 0 && ` · +${pagamentosForaDoMes.length} pagamento(s) de outros meses`}
+                  </span>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="ctp-table w-full">
@@ -781,11 +814,12 @@ export function RelatorioMensalPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {tickets.map((t) => {
+                      {projetosParaTabela.map((t) => {
                         const status = getReportStatus(t)
                         const tone = STATUS_TONES[status]
                         const recebido = getValorRecebido(t)
                         const parceria = isParceria(t)
+                        const foraDoMes = t.data_criacao.slice(0, 10) < inicio || t.data_criacao.slice(0, 10) > fim
                         return (
                           <tr key={t.id}>
                             <td className="px-4 py-3 text-slate-700">{formatarData(t.data_criacao)}</td>
@@ -794,6 +828,11 @@ export function RelatorioMensalPage() {
                               <Link to={`/demandas/${t.id}`} className="font-medium text-slate-800 hover:underline">
                                 {t.titulo}
                               </Link>
+                              {foraDoMes && (
+                                <span className="ml-2 badge" style={{ background: '#F1F5F9', color: '#475569' }}>
+                                  demanda de outro mês
+                                </span>
+                              )}
                             </td>
                             <td className="px-4 py-3 font-medium text-slate-800">{formatarMoeda(getValor(t))}</td>
                             <td className="px-4 py-3">
@@ -806,7 +845,7 @@ export function RelatorioMensalPage() {
                           </tr>
                         )
                       })}
-                      {tickets.length === 0 && (
+                      {projetosParaTabela.length === 0 && (
                         <tr>
                           <td colSpan={PROJ_COLS.length} className="px-4 py-8 text-center text-sm text-slate-500">
                             Nenhum projeto criado em {mesLabel}.
@@ -867,7 +906,7 @@ export function RelatorioMensalPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {tickets.map((t) => (
+                    {projetosParaTabela.map((t) => (
                       <tr key={t.id}>
                         <td>{formatarData(t.data_criacao)}</td>
                         <td>{t.solicitante_nome}</td>

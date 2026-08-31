@@ -287,6 +287,39 @@ export async function getTicket(id: string): Promise<Ticket | null> {
   }
 }
 
+/**
+ * Demandas com pagamento confirmado (Faturamento → pagamento_pago_em) dentro
+ * do período, independente de quando a demanda foi criada. Usado no
+ * relatório mensal para não perder pagamentos de demandas de meses
+ * anteriores (ex.: orçamento aberto em março, pago só em agosto).
+ */
+export async function listTicketsPagosNoPeriodo(
+  inicio: string,
+  fim: string,
+): Promise<Ticket[]> {
+  const run = async (select: string): Promise<Ticket[]> => {
+    const { data, error } = await supabase
+      .from('tickets')
+      .select(select)
+      .is('excluida_em', null)
+      .gte('pagamento_pago_em', `${inicio}T00:00:00`)
+      .lte('pagamento_pago_em', `${fim}T23:59:59.999`)
+      .order('data_criacao', { ascending: true })
+
+    if (error) throw error
+    return (data ?? []).map(mapRowToTicket)
+  }
+
+  try {
+    return await run(TICKETS_SELECT_EXTENDED)
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      return await run(TICKETS_SELECT_BASE)
+    }
+    throw err
+  }
+}
+
 /** Marca a demanda como excluída (some das listas; na página fica só leitura). Exclui as tasks da demanda. */
 export async function setTicketExcluida(id: string): Promise<void> {
   const { error: deleteTasksError } = await supabase
