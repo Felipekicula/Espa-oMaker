@@ -12,6 +12,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",
     "@types/html2pdf.js": "^0.10.0",
+    "exceljs": "^4.4.0",
     "html2pdf.js": "^0.14.0",
     "lucide-react": "^1.21.0",
     "react": "^19.2.0",

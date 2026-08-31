@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import type ExcelJS from 'exceljs'
 import { FolderKanban, Wallet, PiggyBank, Building2 } from 'lucide-react'
 import { LayoutShell } from '../components/LayoutShell'
 import { MetricCard } from '../components/MetricCard'
 import { TicketStatusPill, STATUS_LABELS } from '../components/TicketStatusPill'
-import type { Ticket } from '../types/ticket'
+import type { Ticket, TicketStatus } from '../types/ticket'
 import { listTickets } from '../services/tickets'
 import { listPrefeitura } from '../services/prefeitura'
 import type { RegistroPrefeitura } from '../services/prefeitura'
@@ -12,6 +13,11 @@ import { formatarData, formatarMoeda } from '../utils/formatters'
 
 function getValor(t: Ticket): number {
   return t.valor_demanda ?? t.orcamento?.total ?? 0
+}
+
+/** Solicitações internas identificadas como "CTP" não entram no relatório. */
+function isSolicitanteCTP(nome: string | null | undefined): boolean {
+  return (nome ?? '').trim().toUpperCase() === 'CTP'
 }
 
 type PagamentoInfo = { label: string; tone: 'green' | 'amber' | 'sky' | 'slate' }
@@ -49,28 +55,246 @@ function limitesDoMes(mes: string): { inicio: string; fim: string; label: string
 
 const COLS = ['Data', 'Solicitante', 'Demanda', 'Status', 'Valor', 'Pagamento'] as const
 
-function exportXLS(tickets: Ticket[], mesLabel: string) {
-  const BOM = '﻿'
-  const header = COLS.join(';')
-  const rows = tickets.map((t) => {
-    const pag = getPagamentoInfo(t)
-    return [
-      formatarData(t.data_criacao),
-      t.solicitante_nome,
-      t.titulo,
-      STATUS_LABELS[t.status],
-      formatarMoeda(getValor(t)),
-      pag.label,
-    ]
-      .map((c) => `"${String(c).replace(/"/g, '""')}"`)
-      .join(';')
+const XLSX_COLORS = {
+  navy: 'FF063A70',
+  lime: 'FFA1F01F',
+  white: 'FFFFFFFF',
+  border: 'FFE2E8F0',
+  gray: 'FF64748B',
+  rowAlt: 'FFF8FAFC',
+  kpi: {
+    slate: { fill: 'FFEEF2F7', value: 'FF063A70' },
+    blue: { fill: 'FFEFF6FF', value: 'FF1D4ED8' },
+    green: { fill: 'FFF0FDF4', value: 'FF15803D' },
+    violet: { fill: 'FFF5F3FF', value: 'FF6D28D9' },
+  },
+  pagamento: {
+    green: { fill: 'FFF0FDF4', text: 'FF15803D' },
+    amber: { fill: 'FFFFFBEB', text: 'FF92400E' },
+    sky: { fill: 'FFEFF6FF', text: 'FF1D4ED8' },
+    slate: { fill: 'FFF1F5F9', text: 'FF475569' },
+  },
+} as const
+
+const thinBorder: Partial<ExcelJS.Border> = { style: 'thin', color: { argb: XLSX_COLORS.border } }
+
+function styleHeaderRow(row: ExcelJS.Row) {
+  row.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: XLSX_COLORS.white }, size: 11 }
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XLSX_COLORS.navy } }
+    cell.alignment = { vertical: 'middle', horizontal: 'left' }
+    cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder }
   })
-  const csv = BOM + header + '\r\n' + rows.join('\r\n')
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  row.height = 22
+}
+
+function addKpiCard(
+  sheet: ExcelJS.Worksheet,
+  startCol: string,
+  labelRow: number,
+  label: string,
+  value: string,
+  tone: keyof typeof XLSX_COLORS.kpi,
+) {
+  const endCol = String.fromCharCode(startCol.charCodeAt(0) + 1)
+  const { fill, value: valueColor } = XLSX_COLORS.kpi[tone]
+
+  sheet.mergeCells(`${startCol}${labelRow}:${endCol}${labelRow}`)
+  const labelCell = sheet.getCell(`${startCol}${labelRow}`)
+  labelCell.value = label.toUpperCase()
+  labelCell.font = { size: 9, bold: true, color: { argb: XLSX_COLORS.gray } }
+  labelCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 }
+
+  sheet.mergeCells(`${startCol}${labelRow + 1}:${endCol}${labelRow + 2}`)
+  const valueCell = sheet.getCell(`${startCol}${labelRow + 1}`)
+  valueCell.value = value
+  valueCell.font = { size: 18, bold: true, color: { argb: valueColor } }
+  valueCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 }
+
+  for (let r = labelRow; r <= labelRow + 2; r++) {
+    for (const col of [startCol, endCol]) {
+      const cell = sheet.getCell(`${col}${r}`)
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } }
+      cell.border = {
+        top: r === labelRow ? thinBorder : undefined,
+        bottom: r === labelRow + 2 ? thinBorder : undefined,
+        left: col === startCol ? thinBorder : undefined,
+        right: col === endCol ? thinBorder : undefined,
+      }
+    }
+  }
+  sheet.getRow(labelRow).height = 18
+  sheet.getRow(labelRow + 1).height = 22
+  sheet.getRow(labelRow + 2).height = 22
+}
+
+interface TotaisRelatorio {
+  totalProjetos: number
+  valorOrcado: number
+  valorRecebido: number
+  totalParcerias: number
+}
+
+async function exportXLSX(
+  tickets: Ticket[],
+  parcerias: RegistroPrefeitura[],
+  totais: TotaisRelatorio,
+  mesLabel: string,
+) {
+  const { default: ExcelJS } = await import('exceljs')
+  const wb = new ExcelJS.Workbook()
+  wb.creator = 'Espaço Maker · Cilla Tech Park'
+  wb.created = new Date()
+
+  // ---------------- Aba 1: Resumo (dashboard) ----------------
+  const resumo = wb.addWorksheet('Resumo', { views: [{ showGridLines: false }] })
+  resumo.columns = [
+    { width: 2 }, { width: 22 }, { width: 20 }, { width: 3 },
+    { width: 22 }, { width: 20 }, { width: 3 },
+    { width: 22 }, { width: 20 }, { width: 3 },
+    { width: 22 }, { width: 20 }, { width: 2 },
+  ]
+
+  resumo.mergeCells('B2:L2')
+  const title = resumo.getCell('B2')
+  title.value = 'Relatório Mensal — Espaço Maker'
+  title.font = { size: 18, bold: true, color: { argb: XLSX_COLORS.navy } }
+  resumo.getRow(2).height = 26
+
+  resumo.mergeCells('B3:L3')
+  const subtitle = resumo.getCell('B3')
+  subtitle.value = `${mesLabel} · gerado em ${new Date().toLocaleDateString('pt-BR')}`
+  subtitle.font = { size: 11, color: { argb: XLSX_COLORS.gray } }
+
+  addKpiCard(resumo, 'B', 5, 'Total de projetos', String(totais.totalProjetos), 'slate')
+  addKpiCard(resumo, 'E', 5, 'Valor total orçado', formatarMoeda(totais.valorOrcado), 'blue')
+  addKpiCard(resumo, 'H', 5, 'Valor total recebido', formatarMoeda(totais.valorRecebido), 'green')
+  addKpiCard(resumo, 'K', 5, 'Parcerias (prefeitura)', String(totais.totalParcerias), 'violet')
+
+  const breakdownStart = 10
+  resumo.mergeCells(`B${breakdownStart}:C${breakdownStart}`)
+  const breakdownTitle = resumo.getCell(`B${breakdownStart}`)
+  breakdownTitle.value = 'Projetos por status'
+  breakdownTitle.font = { size: 12, bold: true, color: { argb: XLSX_COLORS.navy } }
+
+  const contagemPorStatus = new Map<string, number>()
+  for (const t of tickets) {
+    contagemPorStatus.set(t.status, (contagemPorStatus.get(t.status) ?? 0) + 1)
+  }
+  const headerBreakdownRow = resumo.getRow(breakdownStart + 1)
+  headerBreakdownRow.getCell(2).value = 'Status'
+  headerBreakdownRow.getCell(3).value = 'Quantidade'
+  styleHeaderRow(headerBreakdownRow)
+  resumo.mergeCells(`D${breakdownStart + 1}:L${breakdownStart + 1}`)
+
+  let r = breakdownStart + 2
+  Array.from(contagemPorStatus.entries())
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([status, count], idx) => {
+      const row = resumo.getRow(r)
+      row.getCell(2).value = STATUS_LABELS[status as TicketStatus] ?? status
+      row.getCell(3).value = count
+      for (const col of [2, 3]) {
+        const cell = row.getCell(col)
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: idx % 2 === 0 ? XLSX_COLORS.white : XLSX_COLORS.rowAlt },
+        }
+        cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder }
+      }
+      r += 1
+    })
+  if (contagemPorStatus.size === 0) {
+    resumo.getRow(r).getCell(2).value = 'Nenhum projeto no período.'
+    r += 1
+  }
+
+  resumo.mergeCells(`B${r + 1}:L${r + 1}`)
+  const nota = resumo.getCell(`B${r + 1}`)
+  nota.value = 'Detalhamento completo de cada projeto na aba "Projetos". Parcerias com prefeituras na aba "Parcerias".'
+  nota.font = { size: 9, italic: true, color: { argb: XLSX_COLORS.gray } }
+
+  // ---------------- Aba 2: Projetos ----------------
+  const projetos = wb.addWorksheet('Projetos', { views: [{ state: 'frozen', ySplit: 1 }] })
+  projetos.columns = [
+    { header: 'Data', key: 'data', width: 13 },
+    { header: 'Solicitante', key: 'solicitante', width: 24 },
+    { header: 'Demanda', key: 'demanda', width: 38 },
+    { header: 'Status', key: 'status', width: 20 },
+    { header: 'Valor', key: 'valor', width: 16, style: { numFmt: '"R$" #,##0.00' } },
+    { header: 'Pagamento', key: 'pagamento', width: 16 },
+  ]
+  styleHeaderRow(projetos.getRow(1))
+
+  tickets.forEach((t, idx) => {
+    const pag = getPagamentoInfo(t)
+    const row = projetos.addRow({
+      data: formatarData(t.data_criacao),
+      solicitante: t.solicitante_nome,
+      demanda: t.titulo,
+      status: STATUS_LABELS[t.status],
+      valor: getValor(t),
+      pagamento: pag.label,
+    })
+    const bg = idx % 2 === 0 ? XLSX_COLORS.white : XLSX_COLORS.rowAlt
+    row.eachCell((cell, colNumber) => {
+      cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder }
+      if (colNumber === 6) {
+        const tone = XLSX_COLORS.pagamento[pag.tone]
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: tone.fill } }
+        cell.font = { color: { argb: tone.text }, bold: true, size: 10 }
+      } else {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bg } }
+      }
+    })
+  })
+
+  if (tickets.length > 0) {
+    const totalRow = projetos.addRow({
+      data: '', solicitante: '', demanda: '', status: 'Total', valor: tickets.reduce((s, t) => s + getValor(t), 0), pagamento: '',
+    })
+    totalRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: XLSX_COLORS.navy } }
+      cell.border = { top: { style: 'medium', color: { argb: XLSX_COLORS.navy } } }
+    })
+  }
+  projetos.autoFilter = { from: 'A1', to: 'F1' }
+
+  // ---------------- Aba 3: Parcerias ----------------
+  const parceriasSheet = wb.addWorksheet('Parcerias', { views: [{ state: 'frozen', ySplit: 1 }] })
+  parceriasSheet.columns = [
+    { header: 'Data', key: 'data', width: 13 },
+    { header: 'Município', key: 'municipio', width: 26 },
+    { header: 'Contato', key: 'contato', width: 24 },
+    { header: 'Status', key: 'status', width: 18 },
+  ]
+  styleHeaderRow(parceriasSheet.getRow(1))
+  parcerias.forEach((p, idx) => {
+    const row = parceriasSheet.addRow({
+      data: formatarData(p.criadoEm),
+      municipio: p.municipio,
+      contato: p.contato,
+      status: p.status,
+    })
+    const bg = idx % 2 === 0 ? XLSX_COLORS.white : XLSX_COLORS.rowAlt
+    row.eachCell((cell) => {
+      cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder }
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bg } }
+    })
+  })
+  if (parcerias.length > 0) {
+    parceriasSheet.autoFilter = { from: 'A1', to: 'D1' }
+  }
+
+  const buffer = await wb.xlsx.writeBuffer()
+  const blob = new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `relatorio-mensal-${mesLabel.replace(/\s+/g, '-').toLowerCase()}.xls`
+  a.download = `relatorio-mensal-${mesLabel.replace(/\s+/g, '-').toLowerCase()}.xlsx`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -96,7 +320,9 @@ export function RelatorioMensalPage() {
         ),
         listPrefeitura(),
       ])
-      setTickets(list.filter((t) => t.status !== 'cancelada'))
+      setTickets(
+        list.filter((t) => t.status !== 'cancelada' && !isSolicitanteCTP(t.solicitante_nome)),
+      )
       setParcerias(
         prefeituraList.filter((p) => {
           const criado = p.criadoEm.slice(0, 10)
@@ -197,8 +423,12 @@ export function RelatorioMensalPage() {
             />
           </div>
           <div className="ml-auto flex gap-2">
-            <button type="button" onClick={() => exportXLS(tickets, mesLabel)} className="btn btn-outline btn-sm">
-              Exportar XLS
+            <button
+              type="button"
+              onClick={() => void exportXLSX(tickets, parcerias, totais, mesLabel)}
+              className="btn btn-outline btn-sm"
+            >
+              Exportar Excel
             </button>
             <button type="button" onClick={handleExportPDF} className="btn btn-outline btn-sm">
               Exportar PDF
