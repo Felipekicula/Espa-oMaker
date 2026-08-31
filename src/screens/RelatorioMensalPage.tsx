@@ -47,9 +47,19 @@ function isParceria(t: Ticket): boolean {
   return getValor(t) === 0
 }
 
-/** Só conta como recebido quando a demanda já está entregue. */
+/**
+ * Na prática, uma demanda só entra em produção depois de pago pelo menos
+ * 50% do orçamento — por isso o valor recebido é inferido pelo status,
+ * sem precisar de um campo novo de "valor pago":
+ *   Em produção/Pós-processo/Pronta ("Pedido em Execução") → 50%
+ *   Entregue ("Pedido em Entregue") → 100%
+ *   qualquer outro status → 0%
+ */
 function getValorRecebido(t: Ticket): number {
-  return t.status === 'entregue' ? getValor(t) : 0
+  const valor = getValor(t)
+  if (t.status === 'entregue') return valor
+  if (t.status === 'em_producao' || t.status === 'pos_processo' || t.status === 'pronta') return valor * 0.5
+  return 0
 }
 
 const STATUS_TONES: Record<(typeof REPORT_STATUS_ORDER)[number], { bg: string; color: string }> = {
@@ -154,7 +164,7 @@ async function exportXLSX(
   const kpiSubRow = 7
   const kpis: { label: string; value: number | string; numFmt?: string; sub: string; startCol: string; endCol: string }[] = [
     { label: 'Total de Projetos', value: totais.totalProjetos, sub: 'todos os projetos do mês', startCol: 'A', endCol: 'B' },
-    { label: 'Valor Total Recebido (R$)', value: totais.valorRecebido, numFmt: '#,##0.00', sub: 'somente "Pedido em Entregue"', startCol: 'C', endCol: 'E' },
+    { label: 'Valor Total Recebido (R$)', value: totais.valorRecebido, numFmt: '#,##0.00', sub: 'Em Execução = 50% · Entregue = 100%', startCol: 'C', endCol: 'E' },
     { label: 'Valor Total Orçado (R$)', value: totais.valorOrcado, numFmt: '#,##0.00', sub: 'demandas que abriram orçamento no mês', startCol: 'F', endCol: 'G' },
     { label: 'Parcerias (Valor = 0)', value: totais.totalParcerias, sub: 'orçamentos cortesia do mês', startCol: 'H', endCol: 'J' },
   ]
@@ -498,7 +508,8 @@ async function exportXLSX(
   ws.mergeCells(`A${obsRow}:J${obsRow}`)
   const obs = ws.getCell(`A${obsRow}`)
   obs.value =
-    'Valor Total Recebido = soma só das demandas com status "Pedido em Entregue".  •  ' +
+    'Valor Recebido é inferido pelo status (a produção só começa após pagar pelo menos 50%): ' +
+    '"Pedido em Execução" conta 50% do valor orçado, "Pedido em Entregue" conta 100%, os demais contam 0%.  •  ' +
     'Valor Total Orçado = soma de todas as demandas que abriram orçamento no mês, qualquer status.  •  ' +
     'Parceria = projetos com valor R$ 0,00 (orçamento cortesia).  •  ' +
     'Total Geral Recebido = Valor Total Recebido + Vendas da Lojinha CTP (célula amarela, manual).'
