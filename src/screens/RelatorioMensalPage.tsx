@@ -92,7 +92,7 @@ function limitesDoMes(mes: string): { inicio: string; fim: string; label: string
   return { inicio, fim, label: label.charAt(0).toUpperCase() + label.slice(1) }
 }
 
-const PROJ_COLS = ['Data', 'Cliente', 'Projeto/Produto', 'Valor Orçado', 'Status Atual', 'Valor Recebido', 'Parceria'] as const
+const PROJ_COLS = ['Data', 'Cliente', 'Projeto/Produto', 'Valor Orçado', 'Status Atual', 'Valor Recebido'] as const
 
 // ============================================================
 // Exportação Excel — réplica do Dashboard usado pela equipe,
@@ -127,14 +127,158 @@ interface TotaisRelatorio {
   totalParcerias: number
 }
 
+/**
+ * Renderiza uma seção de tabela de projetos (título + cabeçalho + linhas + total)
+ * a partir da `startRow` informada e devolve a última linha ocupada.
+ */
+function renderProjetosSection(
+  ws: ExcelJS.Worksheet,
+  startRow: number,
+  title: string,
+  items: Ticket[],
+  emptyMessage: string,
+): number {
+  ws.mergeCells(`A${startRow}:J${startRow}`)
+  const sectionTitle = ws.getCell(`A${startRow}`)
+  sectionTitle.value = title
+  sectionTitle.font = { name: 'Arial', size: 12, bold: true, color: { argb: X.white } }
+  sectionTitle.alignment = { horizontal: 'left', vertical: 'middle' }
+  fillCell(sectionTitle, X.sectionBlue)
+  ws.getRow(startRow).height = 20
+
+  const colsRow = startRow + 1
+  const headers = ['Data', 'Cliente', 'Projeto/Produto', 'Valor Orçado (R$)', 'Status Atual', 'Valor Recebido (R$)']
+  const colLetters = ['A', 'B', 'C', 'D', 'E', 'F']
+  colLetters.forEach((col, i) => {
+    const cell = ws.getCell(`${col}${colsRow}`)
+    cell.value = headers[i]
+    cell.font = { name: 'Arial', size: 10, bold: true }
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+    fillCell(cell, X.tableHead)
+    cell.border = borderAll
+  })
+  ws.mergeCells(`G${colsRow}:J${colsRow}`)
+  fillCell(ws.getCell(`G${colsRow}`), X.tableHead)
+  ws.getCell(`G${colsRow}`).border = borderAll
+  ws.getRow(colsRow).height = 26
+
+  const firstDataRow = colsRow + 1
+  items.forEach((item, i) => {
+    const r = firstDataRow + i
+    const bg = i % 2 === 0 ? X.white : X.rowAlt
+    const valor = getValor(item)
+    const recebido = getValorRecebido(item)
+
+    const cData = ws.getCell(`A${r}`)
+    cData.value = new Date(item.data_criacao)
+    cData.numFmt = 'dd/mm/yyyy'
+    cData.font = { name: 'Arial', size: 10 }
+    cData.alignment = { horizontal: 'left', vertical: 'middle' }
+    fillCell(cData, bg)
+    cData.border = borderAll
+
+    const cCliente = ws.getCell(`B${r}`)
+    cCliente.value = item.solicitante_nome
+    cCliente.font = { name: 'Arial', size: 10 }
+    cCliente.alignment = { horizontal: 'left', vertical: 'middle' }
+    fillCell(cCliente, bg)
+    cCliente.border = borderAll
+
+    const cProjeto = ws.getCell(`C${r}`)
+    cProjeto.value = item.titulo
+    cProjeto.font = { name: 'Arial', size: 10 }
+    cProjeto.alignment = { horizontal: 'left', vertical: 'middle' }
+    fillCell(cProjeto, bg)
+    cProjeto.border = borderAll
+
+    const cValor = ws.getCell(`D${r}`)
+    cValor.value = valor
+    cValor.numFmt = '#,##0.00'
+    cValor.font = { name: 'Arial', size: 10 }
+    cValor.alignment = { horizontal: 'right', vertical: 'middle' }
+    fillCell(cValor, bg)
+    cValor.border = borderAll
+
+    const cStatus = ws.getCell(`E${r}`)
+    cStatus.value = getReportStatus(item)
+    cStatus.font = { name: 'Arial', size: 10 }
+    cStatus.alignment = { horizontal: 'left', vertical: 'middle' }
+    fillCell(cStatus, bg)
+    cStatus.border = borderAll
+
+    const cRecebido = ws.getCell(`F${r}`)
+    cRecebido.value = recebido
+    cRecebido.numFmt = '#,##0.00;(#,##0.00);-'
+    cRecebido.font = { name: 'Arial', size: 10 }
+    cRecebido.alignment = { horizontal: 'right', vertical: 'middle' }
+    fillCell(cRecebido, bg)
+    cRecebido.border = borderAll
+
+    ws.mergeCells(`G${r}:J${r}`)
+    fillCell(ws.getCell(`G${r}`), bg)
+    ws.getCell(`G${r}`).border = borderAll
+
+    ws.getRow(r).height = 16
+  })
+
+  const lastDataRow = firstDataRow + items.length - 1
+
+  if (items.length > 0) {
+    const totalRow = lastDataRow + 1
+    const totalValor = items.reduce((s, it) => s + getValor(it), 0)
+    const totalRecebido = items.reduce((s, it) => s + getValorRecebido(it), 0)
+
+    ws.mergeCells(`A${totalRow}:C${totalRow}`)
+    const totalLabel = ws.getCell(`A${totalRow}`)
+    totalLabel.value = 'Total'
+    totalLabel.font = { name: 'Arial', size: 10, bold: true, color: { argb: X.navy } }
+    totalLabel.alignment = { horizontal: 'left', vertical: 'middle' }
+    fillCell(totalLabel, X.tableHead)
+    totalLabel.border = borderAll
+
+    const cTotalValor = ws.getCell(`D${totalRow}`)
+    cTotalValor.value = totalValor
+    cTotalValor.numFmt = '#,##0.00'
+    cTotalValor.font = { name: 'Arial', size: 10, bold: true }
+    cTotalValor.alignment = { horizontal: 'right', vertical: 'middle' }
+    fillCell(cTotalValor, X.tableHead)
+    cTotalValor.border = borderAll
+
+    fillCell(ws.getCell(`E${totalRow}`), X.tableHead)
+    ws.getCell(`E${totalRow}`).border = borderAll
+
+    const cTotalRecebido = ws.getCell(`F${totalRow}`)
+    cTotalRecebido.value = totalRecebido
+    cTotalRecebido.numFmt = '#,##0.00'
+    cTotalRecebido.font = { name: 'Arial', size: 10, bold: true }
+    cTotalRecebido.alignment = { horizontal: 'right', vertical: 'middle' }
+    fillCell(cTotalRecebido, X.tableHead)
+    cTotalRecebido.border = borderAll
+
+    ws.mergeCells(`G${totalRow}:J${totalRow}`)
+    fillCell(ws.getCell(`G${totalRow}`), X.tableHead)
+    ws.getCell(`G${totalRow}`).border = borderAll
+
+    return totalRow
+  }
+
+  const emptyRow = lastDataRow + 1
+  ws.mergeCells(`A${emptyRow}:J${emptyRow}`)
+  const emptyCell = ws.getCell(`A${emptyRow}`)
+  emptyCell.value = emptyMessage
+  emptyCell.font = { name: 'Arial', size: 10, italic: true, color: { argb: X.gray } }
+  emptyCell.alignment = { horizontal: 'center', vertical: 'middle' }
+  ws.getRow(emptyRow).height = 16
+  return emptyRow
+}
+
 async function exportXLSX(
   tickets: Ticket[],
-  projetosParaTabela: Ticket[],
+  projetosDoMes: Ticket[],
+  pagamentosForaDoMes: Ticket[],
   totais: TotaisRelatorio,
   lojinha: number,
   mesLabel: string,
-  inicio: string,
-  fim: string,
 ) {
   const { default: ExcelJS } = await import('exceljs')
   const wb = new ExcelJS.Workbook()
@@ -168,7 +312,7 @@ async function exportXLSX(
   const kpiValueRow = 5
   const kpiSubRow = 7
   const kpis: { label: string; value: number | string; numFmt?: string; sub: string; startCol: string; endCol: string }[] = [
-    { label: 'Total de Projetos', value: totais.totalProjetos, sub: 'todos os projetos do mês', startCol: 'A', endCol: 'B' },
+    { label: 'Total de Projetos', value: totais.totalProjetos, sub: 'demandas com valor (exclui parcerias)', startCol: 'A', endCol: 'B' },
     { label: 'Valor Total Recebido (R$)', value: totais.valorRecebido, numFmt: '#,##0.00', sub: 'Responsável = 50% · Faturamento pago/Entregue = 100%', startCol: 'C', endCol: 'E' },
     { label: 'Valor Total Orçado (R$)', value: totais.valorOrcado, numFmt: '#,##0.00', sub: 'demandas que abriram orçamento no mês', startCol: 'F', endCol: 'G' },
     { label: 'Parcerias (Valor = 0)', value: totais.totalParcerias, sub: 'orçamentos cortesia do mês', startCol: 'H', endCol: 'J' },
@@ -305,142 +449,26 @@ async function exportXLSX(
   const resumoLastRow = resumoColsRow + REPORT_STATUS_ORDER.length
 
   // ---------- Projetos do mês ----------
-  const projHeaderRow = resumoLastRow + 2
-  ws.mergeCells(`A${projHeaderRow}:J${projHeaderRow}`)
-  const projTitle = ws.getCell(`A${projHeaderRow}`)
-  projTitle.value = 'PROJETOS DO MÊS'
-  projTitle.font = { name: 'Arial', size: 12, bold: true, color: { argb: X.white } }
-  projTitle.alignment = { horizontal: 'left', vertical: 'middle' }
-  fillCell(projTitle, X.sectionBlue)
-  ws.getRow(projHeaderRow).height = 20
+  const projLastRow = renderProjetosSection(
+    ws,
+    resumoLastRow + 2,
+    'PROJETOS DO MÊS',
+    projetosDoMes,
+    'Nenhum projeto criado neste mês.',
+  )
 
-  const projColsRow = projHeaderRow + 1
-  const projHeaders = ['Data', 'Cliente', 'Projeto/Produto', 'Valor Orçado (R$)', 'Status Atual', 'Valor Recebido (R$)', 'Parceria']
-  const colLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
-  colLetters.forEach((col, i) => {
-    const cell = ws.getCell(`${col}${projColsRow}`)
-    cell.value = projHeaders[i]
-    cell.font = { name: 'Arial', size: 10, bold: true }
-    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
-    fillCell(cell, X.tableHead)
-    cell.border = borderAll
-  })
-  ws.mergeCells(`H${projColsRow}:J${projColsRow}`)
-  fillCell(ws.getCell(`H${projColsRow}`), X.tableHead)
-  ws.getCell(`H${projColsRow}`).border = borderAll
-  ws.getRow(projColsRow).height = 26
-
-  const firstDataRow = projColsRow + 1
-  projetosParaTabela.forEach((t, i) => {
-    const r = firstDataRow + i
-    const bg = i % 2 === 0 ? X.white : X.rowAlt
-    const valor = getValor(t)
-    const recebido = getValorRecebido(t)
-    const parceria = isParceria(t)
-    const dataCriacao = t.data_criacao.slice(0, 10)
-    const foraDoMes = dataCriacao < inicio || dataCriacao > fim
-
-    const cData = ws.getCell(`A${r}`)
-    cData.value = new Date(t.data_criacao)
-    cData.numFmt = 'dd/mm/yyyy'
-    cData.font = { name: 'Arial', size: 10 }
-    cData.alignment = { horizontal: 'left', vertical: 'middle' }
-    fillCell(cData, bg)
-    cData.border = borderAll
-
-    const cCliente = ws.getCell(`B${r}`)
-    cCliente.value = t.solicitante_nome
-    cCliente.font = { name: 'Arial', size: 10 }
-    cCliente.alignment = { horizontal: 'left', vertical: 'middle' }
-    fillCell(cCliente, bg)
-    cCliente.border = borderAll
-
-    const cProjeto = ws.getCell(`C${r}`)
-    cProjeto.value = foraDoMes ? `${t.titulo} (demanda de outro mês)` : t.titulo
-    cProjeto.font = { name: 'Arial', size: 10, italic: foraDoMes }
-    cProjeto.alignment = { horizontal: 'left', vertical: 'middle' }
-    fillCell(cProjeto, bg)
-    cProjeto.border = borderAll
-
-    const cValor = ws.getCell(`D${r}`)
-    cValor.value = valor
-    cValor.numFmt = '#,##0.00'
-    cValor.font = { name: 'Arial', size: 10 }
-    cValor.alignment = { horizontal: 'right', vertical: 'middle' }
-    fillCell(cValor, bg)
-    cValor.border = borderAll
-
-    const cStatus = ws.getCell(`E${r}`)
-    cStatus.value = getReportStatus(t)
-    cStatus.font = { name: 'Arial', size: 10 }
-    cStatus.alignment = { horizontal: 'left', vertical: 'middle' }
-    fillCell(cStatus, bg)
-    cStatus.border = borderAll
-
-    const cRecebido = ws.getCell(`F${r}`)
-    cRecebido.value = recebido
-    cRecebido.numFmt = '#,##0.00;(#,##0.00);-'
-    cRecebido.font = { name: 'Arial', size: 10 }
-    cRecebido.alignment = { horizontal: 'right', vertical: 'middle' }
-    fillCell(cRecebido, bg)
-    cRecebido.border = borderAll
-
-    const cParceria = ws.getCell(`G${r}`)
-    cParceria.value = parceria ? 'Sim' : 'Não'
-    cParceria.font = { name: 'Arial', size: 10 }
-    cParceria.alignment = { horizontal: 'center', vertical: 'middle' }
-    fillCell(cParceria, bg)
-    cParceria.border = borderAll
-
-    ws.mergeCells(`H${r}:J${r}`)
-    fillCell(ws.getCell(`H${r}`), bg)
-    ws.getCell(`H${r}`).border = borderAll
-
-    ws.getRow(r).height = 16
-  })
-
-  const lastDataRow = firstDataRow + projetosParaTabela.length - 1
-  const totalRow = lastDataRow + 1
-  if (projetosParaTabela.length > 0) {
-    ws.mergeCells(`A${totalRow}:C${totalRow}`)
-    const totalLabel = ws.getCell(`A${totalRow}`)
-    totalLabel.value = 'Total'
-    totalLabel.font = { name: 'Arial', size: 10, bold: true, color: { argb: X.navy } }
-    totalLabel.alignment = { horizontal: 'left', vertical: 'middle' }
-    fillCell(totalLabel, X.tableHead)
-    totalLabel.border = borderAll
-
-    // Soma direta (não fórmula): demandas de outro mês entram no Recebido mas
-    // não no Orçado, então uma soma simples de coluna não serviria para os dois.
-    const totalOrcado = ws.getCell(`D${totalRow}`)
-    totalOrcado.value = totais.valorOrcado
-    totalOrcado.numFmt = '#,##0.00'
-    totalOrcado.font = { name: 'Arial', size: 10, bold: true }
-    totalOrcado.alignment = { horizontal: 'right', vertical: 'middle' }
-    fillCell(totalOrcado, X.tableHead)
-    totalOrcado.border = borderAll
-
-    fillCell(ws.getCell(`E${totalRow}`), X.tableHead)
-    ws.getCell(`E${totalRow}`).border = borderAll
-
-    const totalRecebido = ws.getCell(`F${totalRow}`)
-    totalRecebido.value = totais.valorRecebido
-    totalRecebido.numFmt = '#,##0.00'
-    totalRecebido.font = { name: 'Arial', size: 10, bold: true }
-    totalRecebido.alignment = { horizontal: 'right', vertical: 'middle' }
-    fillCell(totalRecebido, X.tableHead)
-    totalRecebido.border = borderAll
-
-    fillCell(ws.getCell(`G${totalRow}`), X.tableHead)
-    ws.getCell(`G${totalRow}`).border = borderAll
-    ws.mergeCells(`H${totalRow}:J${totalRow}`)
-    fillCell(ws.getCell(`H${totalRow}`), X.tableHead)
-    ws.getCell(`H${totalRow}`).border = borderAll
-  }
+  // ---------- Pagamentos recebidos de outros meses ----------
+  const pagamentosLastRow = renderProjetosSection(
+    ws,
+    projLastRow + 2,
+    'PAGAMENTOS RECEBIDOS DE OUTROS MESES',
+    pagamentosForaDoMes,
+    'Nenhum pagamento de outro mês recebido neste mês.',
+  )
 
   // ---------- Parcerias ----------
   const parcerias = tickets.filter(isParceria)
-  const parcHeaderRow = (projetosParaTabela.length > 0 ? totalRow : lastDataRow) + 2
+  const parcHeaderRow = pagamentosLastRow + 2
   ws.mergeCells(`A${parcHeaderRow}:J${parcHeaderRow}`)
   const parcTitle = ws.getCell(`A${parcHeaderRow}`)
   parcTitle.value = 'PARCERIAS — Projetos com Valor = R$ 0,00'
@@ -520,9 +548,9 @@ async function exportXLSX(
     'Valor Recebido: demanda com faturamento dado baixa como pago (ou status Entregue) conta 100% do valor orçado; ' +
     'demanda com responsável definido (mas sem baixa de pagamento) conta 50%, pois só se define responsável depois de pago pelo menos metade; ' +
     'sem nenhum dos dois sinais, ou cancelada, conta 0%.  •  ' +
-    'Marcadas "(demanda de outro mês)" foram criadas em outro mês, mas o pagamento foi confirmado agora — o valor conta no Recebido deste mês, mas não no Orçado.  •  ' +
-    'Valor Total Orçado = soma de todas as demandas que abriram orçamento no mês, qualquer status.  •  ' +
-    'Parceria = projetos com valor R$ 0,00 (orçamento cortesia).  •  ' +
+    '"Pagamentos Recebidos de Outros Meses" são demandas criadas em mês anterior, mas cujo pagamento foi confirmado neste mês — contam no Valor Total Recebido, mas não no Valor Total Orçado.  •  ' +
+    'Valor Total Orçado = soma de todas as demandas com valor que abriram orçamento no mês, qualquer status.  •  ' +
+    'Parceria = projetos com valor R$ 0,00 (orçamento cortesia/interno) — não entram em "Projetos do Mês" nem no Total de Projetos.  •  ' +
     'Total Geral Recebido = Valor Total Recebido + Vendas da Lojinha CTP (célula amarela, manual).'
   obs.font = { name: 'Arial', size: 8, italic: true, color: { argb: X.grayLight } }
   obs.alignment = { horizontal: 'left', vertical: 'top', wrapText: true }
@@ -580,23 +608,27 @@ export function RelatorioMensalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mes])
 
-  const projetosParaTabela = useMemo(
-    () => [...tickets, ...pagamentosForaDoMes],
-    [tickets, pagamentosForaDoMes],
+  // Parceria (valor R$ 0,00) é demanda interna — conta só na seção "Parcerias",
+  // nunca em "Projetos do Mês" nem no "Total de Projetos" (que mede clientes
+  // externos que entraram em contato no mês).
+  const projetosComValor = useMemo(() => tickets.filter((t) => !isParceria(t)), [tickets])
+  const pagamentosForaDoMesComValor = useMemo(
+    () => pagamentosForaDoMes.filter((t) => !isParceria(t)),
+    [pagamentosForaDoMes],
   )
 
   const totais = useMemo<TotaisRelatorio>(() => {
-    const valorOrcado = tickets.reduce((sum, t) => sum + getValor(t), 0)
-    const valorRecebidoDoMes = tickets.reduce((sum, t) => sum + getValorRecebido(t), 0)
-    const valorRecebidoForaDoMes = pagamentosForaDoMes.reduce((sum, t) => sum + getValorRecebido(t), 0)
+    const valorOrcado = projetosComValor.reduce((sum, t) => sum + getValor(t), 0)
+    const valorRecebidoDoMes = projetosComValor.reduce((sum, t) => sum + getValorRecebido(t), 0)
+    const valorRecebidoForaDoMes = pagamentosForaDoMesComValor.reduce((sum, t) => sum + getValorRecebido(t), 0)
     const totalParcerias = tickets.filter(isParceria).length
     return {
-      totalProjetos: tickets.length,
+      totalProjetos: projetosComValor.length,
       valorOrcado,
       valorRecebido: valorRecebidoDoMes + valorRecebidoForaDoMes,
       totalParcerias,
     }
-  }, [tickets, pagamentosForaDoMes])
+  }, [tickets, projetosComValor, pagamentosForaDoMesComValor])
 
   const totalGeralRecebido = totais.valorRecebido + lojinha
   const parcerias = useMemo(() => tickets.filter(isParceria), [tickets])
@@ -645,7 +677,6 @@ export function RelatorioMensalPage() {
           <div><p class="label">Parcerias</p><p class="value">${totais.totalParcerias}</p></div>
           <div><p class="label">Total geral recebido</p><p class="value">${formatarMoeda(totalGeralRecebido)}</p></div>
         </div>
-        <h2>Projetos do mês</h2>
         ${printContent}
       </body></html>
     `)
@@ -696,7 +727,9 @@ export function RelatorioMensalPage() {
           <div className="ml-auto flex gap-2">
             <button
               type="button"
-              onClick={() => void exportXLSX(tickets, projetosParaTabela, totais, lojinha, mesLabel, inicio, fim)}
+              onClick={() =>
+                void exportXLSX(tickets, projetosComValor, pagamentosForaDoMesComValor, totais, lojinha, mesLabel)
+              }
               className="btn btn-outline btn-sm"
             >
               Exportar Excel
@@ -798,8 +831,9 @@ export function RelatorioMensalPage() {
                     Projetos de {mesLabel}
                   </p>
                   <span className="text-xs text-slate-500">
-                    {tickets.length} projeto(s)
-                    {pagamentosForaDoMes.length > 0 && ` · +${pagamentosForaDoMes.length} pagamento(s) de outros meses`}
+                    {projetosComValor.length} projeto(s)
+                    {pagamentosForaDoMesComValor.length > 0 &&
+                      ` · +${pagamentosForaDoMesComValor.length} pagamento(s) de outros meses`}
                   </span>
                 </div>
                 <div className="overflow-x-auto">
@@ -814,12 +848,10 @@ export function RelatorioMensalPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {projetosParaTabela.map((t) => {
+                      {projetosComValor.map((t) => {
                         const status = getReportStatus(t)
                         const tone = STATUS_TONES[status]
                         const recebido = getValorRecebido(t)
-                        const parceria = isParceria(t)
-                        const foraDoMes = t.data_criacao.slice(0, 10) < inicio || t.data_criacao.slice(0, 10) > fim
                         return (
                           <tr key={t.id}>
                             <td className="px-4 py-3 text-slate-700">{formatarData(t.data_criacao)}</td>
@@ -828,11 +860,6 @@ export function RelatorioMensalPage() {
                               <Link to={`/demandas/${t.id}`} className="font-medium text-slate-800 hover:underline">
                                 {t.titulo}
                               </Link>
-                              {foraDoMes && (
-                                <span className="ml-2 badge" style={{ background: '#F1F5F9', color: '#475569' }}>
-                                  demanda de outro mês
-                                </span>
-                              )}
                             </td>
                             <td className="px-4 py-3 font-medium text-slate-800">{formatarMoeda(getValor(t))}</td>
                             <td className="px-4 py-3">
@@ -841,14 +868,72 @@ export function RelatorioMensalPage() {
                               </span>
                             </td>
                             <td className="px-4 py-3 text-slate-700">{recebido > 0 ? formatarMoeda(recebido) : '—'}</td>
-                            <td className="px-4 py-3 text-slate-700">{parceria ? 'Sim' : 'Não'}</td>
                           </tr>
                         )
                       })}
-                      {projetosParaTabela.length === 0 && (
+                      {projetosComValor.length === 0 && (
                         <tr>
                           <td colSpan={PROJ_COLS.length} className="px-4 py-8 text-center text-sm text-slate-500">
                             Nenhum projeto criado em {mesLabel}.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="ctp-card overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      Pagamentos recebidos de outros meses
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Demandas criadas antes de {mesLabel.toLowerCase()}, mas com pagamento confirmado agora.
+                    </p>
+                  </div>
+                  <span className="text-xs text-slate-500">{pagamentosForaDoMesComValor.length} pagamento(s)</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="ctp-table w-full">
+                    <thead>
+                      <tr>
+                        {PROJ_COLS.map((c) => (
+                          <th key={c} className="px-4 py-3">
+                            {c}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pagamentosForaDoMesComValor.map((t) => {
+                        const status = getReportStatus(t)
+                        const tone = STATUS_TONES[status]
+                        const recebido = getValorRecebido(t)
+                        return (
+                          <tr key={t.id}>
+                            <td className="px-4 py-3 text-slate-700">{formatarData(t.data_criacao)}</td>
+                            <td className="px-4 py-3 text-slate-700">{t.solicitante_nome}</td>
+                            <td className="px-4 py-3">
+                              <Link to={`/demandas/${t.id}`} className="font-medium text-slate-800 hover:underline">
+                                {t.titulo}
+                              </Link>
+                            </td>
+                            <td className="px-4 py-3 font-medium text-slate-800">{formatarMoeda(getValor(t))}</td>
+                            <td className="px-4 py-3">
+                              <span className="badge" style={{ background: tone.bg, color: tone.color }}>
+                                {status}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-slate-700">{recebido > 0 ? formatarMoeda(recebido) : '—'}</td>
+                          </tr>
+                        )
+                      })}
+                      {pagamentosForaDoMesComValor.length === 0 && (
+                        <tr>
+                          <td colSpan={PROJ_COLS.length} className="px-4 py-8 text-center text-sm text-slate-500">
+                            Nenhum pagamento de outro mês recebido em {mesLabel}.
                           </td>
                         </tr>
                       )}
@@ -897,6 +982,7 @@ export function RelatorioMensalPage() {
 
               {/* Área usada só na impressão/PDF */}
               <div ref={printRef} className="hidden" aria-hidden>
+                <h2>Projetos do mês</h2>
                 <table>
                   <thead>
                     <tr>
@@ -906,7 +992,7 @@ export function RelatorioMensalPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {projetosParaTabela.map((t) => (
+                    {projetosComValor.map((t) => (
                       <tr key={t.id}>
                         <td>{formatarData(t.data_criacao)}</td>
                         <td>{t.solicitante_nome}</td>
@@ -914,11 +1000,36 @@ export function RelatorioMensalPage() {
                         <td>{formatarMoeda(getValor(t))}</td>
                         <td>{getReportStatus(t)}</td>
                         <td>{getValorRecebido(t) > 0 ? formatarMoeda(getValorRecebido(t)) : '—'}</td>
-                        <td>{isParceria(t) ? 'Sim' : 'Não'}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                {pagamentosForaDoMesComValor.length > 0 && (
+                  <>
+                    <h2>Pagamentos recebidos de outros meses</h2>
+                    <table>
+                      <thead>
+                        <tr>
+                          {PROJ_COLS.map((c) => (
+                            <th key={c}>{c}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pagamentosForaDoMesComValor.map((t) => (
+                          <tr key={t.id}>
+                            <td>{formatarData(t.data_criacao)}</td>
+                            <td>{t.solicitante_nome}</td>
+                            <td>{t.titulo}</td>
+                            <td>{formatarMoeda(getValor(t))}</td>
+                            <td>{getReportStatus(t)}</td>
+                            <td>{getValorRecebido(t) > 0 ? formatarMoeda(getValorRecebido(t)) : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
+                )}
               </div>
             </>
           )
