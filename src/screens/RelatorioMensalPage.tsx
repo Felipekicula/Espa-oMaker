@@ -48,19 +48,34 @@ function isParceria(t: Ticket): boolean {
 }
 
 /**
+ * Responsável só é atribuído a partir do status "aprovado", e a própria
+ * atribuição sempre reseta o status para "em_analise" (ver
+ * AtribuirResponsavelPage). Ou seja: um responsável definido só é sinal
+ * confiável de 50% pago quando o status atual é um desses — se a demanda tem
+ * responsável mas está em "Orçamento Gerado"/"Aguardando Aprovação", o
+ * orçamento foi reaberto depois da atribuição e não dá pra confiar no sinal.
+ */
+const RESPONSAVEL_IMPLICA_50_PORCENTO: readonly TicketStatus[] = [
+  'em_analise',
+  'em_producao',
+  'pos_processo',
+  'pronta',
+]
+
+/**
  * Valor recebido, do sinal mais confiável para o mais fraco:
  *   1) "Faturamento" marcado como pago (pagamento_pago_em, dado baixa manual
  *      na demanda) → 100%, vale independente do status atual
  *   2) Status Entregue → 100% (se ainda não tinha sido marcado o faturamento)
- *   3) Já tem responsável definido → 50% (na prática só se define responsável
- *      depois de pago pelo menos metade do orçamento)
+ *   3) Já tem responsável definido e o status confirma o ciclo pós-aprovação
+ *      → 50%
  *   4) Cancelada ou nenhum dos sinais acima → 0%
  */
 function getValorRecebido(t: Ticket): number {
   if (t.status === 'cancelada') return 0
   const valor = getValor(t)
   if (t.pagamento_pago_em || t.status === 'entregue') return valor
-  if (t.responsavel_id) return valor * 0.5
+  if (t.responsavel_id && RESPONSAVEL_IMPLICA_50_PORCENTO.includes(t.status)) return valor * 0.5
   return 0
 }
 
@@ -546,7 +561,7 @@ async function exportXLSX(
   const obs = ws.getCell(`A${obsRow}`)
   obs.value =
     'Valor Recebido: demanda com faturamento dado baixa como pago (ou status Entregue) conta 100% do valor orçado; ' +
-    'demanda com responsável definido (mas sem baixa de pagamento) conta 50%, pois só se define responsável depois de pago pelo menos metade; ' +
+    'demanda com responsável definido, em Em análise/Pedido em Execução (mas sem baixa de pagamento), conta 50%, pois só se define responsável depois de pago pelo menos metade; ' +
     'sem nenhum dos dois sinais, ou cancelada, conta 0%.  •  ' +
     '"Pagamentos Recebidos de Outros Meses" são demandas criadas em mês anterior, mas cujo pagamento foi confirmado neste mês — contam no Valor Total Recebido, mas não no Valor Total Orçado.  •  ' +
     'Valor Total Orçado = soma de todas as demandas com valor que abriram orçamento no mês, qualquer status.  •  ' +
