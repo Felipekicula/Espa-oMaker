@@ -1,39 +1,66 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type ExcelJS from 'exceljs'
-import { FolderKanban, Wallet, PiggyBank, Building2 } from 'lucide-react'
+import { FolderKanban, Wallet, PiggyBank, HeartHandshake } from 'lucide-react'
 import { LayoutShell } from '../components/LayoutShell'
 import { MetricCard } from '../components/MetricCard'
-import { TicketStatusPill, STATUS_LABELS } from '../components/TicketStatusPill'
 import type { Ticket, TicketStatus } from '../types/ticket'
 import { listTickets } from '../services/tickets'
-import { listPrefeitura } from '../services/prefeitura'
-import type { RegistroPrefeitura } from '../services/prefeitura'
 import { formatarData, formatarMoeda } from '../utils/formatters'
+
+/** As 11 fases técnicas do sistema são resumidas nestas 8 categorias do relatório. */
+const REPORT_STATUS_ORDER = [
+  'Em análise',
+  'Orçamento Gerado',
+  'Orçamento Aguardando Aprovação Pedro',
+  'Orçamento Aguardando Aprovação Cliente',
+  'Cancelada',
+  'Pedido Gerado',
+  'Pedido em Execução',
+  'Pedido em Entregue',
+] as const
+
+const REPORT_STATUS_MAP: Record<TicketStatus, (typeof REPORT_STATUS_ORDER)[number]> = {
+  recebida: 'Em análise',
+  em_analise: 'Em análise',
+  orcamento_em_criacao: 'Orçamento Gerado',
+  aguardando_aprovacao: 'Orçamento Aguardando Aprovação Pedro',
+  enviado_cliente: 'Orçamento Aguardando Aprovação Cliente',
+  cancelada: 'Cancelada',
+  aprovado: 'Pedido Gerado',
+  em_producao: 'Pedido em Execução',
+  pos_processo: 'Pedido em Execução',
+  pronta: 'Pedido em Execução',
+  entregue: 'Pedido em Entregue',
+}
+
+function getReportStatus(t: Ticket) {
+  return REPORT_STATUS_MAP[t.status] ?? 'Em análise'
+}
 
 function getValor(t: Ticket): number {
   return t.valor_demanda ?? t.orcamento?.total ?? 0
 }
 
-/** Solicitações internas identificadas como "CTP" não entram no relatório. */
-function isSolicitanteCTP(nome: string | null | undefined): boolean {
-  return (nome ?? '').trim().toUpperCase() === 'CTP'
+/** Parceria = orçamento cortesia (valor R$ 0,00), não é sobre tipo interna/externa. */
+function isParceria(t: Ticket): boolean {
+  return getValor(t) === 0
 }
 
-type PagamentoInfo = { label: string; tone: 'green' | 'amber' | 'sky' | 'slate' }
-
-function getPagamentoInfo(t: Ticket): PagamentoInfo {
-  if (t.tipo_receita === 'contrapartida') return { label: 'Contrapartida', tone: 'sky' }
-  if (t.receita_recorrente) return { label: 'Recorrente', tone: 'sky' }
-  if (t.pagamento_pago_em) return { label: 'Pago 100%', tone: 'green' }
-  return { label: 'Pendente', tone: 'amber' }
+/** Só conta como recebido quando a demanda já está entregue. */
+function getValorRecebido(t: Ticket): number {
+  return t.status === 'entregue' ? getValor(t) : 0
 }
 
-const PAGAMENTO_TONES: Record<PagamentoInfo['tone'], { bg: string; color: string }> = {
-  green: { bg: '#F0FDF4', color: '#15803D' },
-  amber: { bg: '#FFFBEB', color: '#92400E' },
-  sky: { bg: '#EFF6FF', color: '#1D4ED8' },
-  slate: { bg: '#F1F5F9', color: '#475569' },
+const STATUS_TONES: Record<(typeof REPORT_STATUS_ORDER)[number], { bg: string; color: string }> = {
+  'Em análise': { bg: '#F1F5F9', color: '#475569' },
+  'Orçamento Gerado': { bg: '#ECFEFF', color: '#155E75' },
+  'Orçamento Aguardando Aprovação Pedro': { bg: '#FFFBEB', color: '#92400E' },
+  'Orçamento Aguardando Aprovação Cliente': { bg: '#FCE7D8', color: '#B5580F' },
+  Cancelada: { bg: '#FEF2F2', color: '#991B1B' },
+  'Pedido Gerado': { bg: '#EFF6FF', color: '#1D4ED8' },
+  'Pedido em Execução': { bg: '#F5F3FF', color: '#6D28D9' },
+  'Pedido em Entregue': { bg: '#F0FDF4', color: '#15803D' },
 }
 
 function mesAtualStr(): string {
@@ -53,79 +80,32 @@ function limitesDoMes(mes: string): { inicio: string; fim: string; label: string
   return { inicio, fim, label: label.charAt(0).toUpperCase() + label.slice(1) }
 }
 
-const COLS = ['Data', 'Solicitante', 'Demanda', 'Status', 'Valor', 'Pagamento'] as const
+const PROJ_COLS = ['Data', 'Cliente', 'Projeto/Produto', 'Valor Orçado', 'Status Atual', 'Valor Recebido', 'Parceria'] as const
 
-const XLSX_COLORS = {
-  navy: 'FF063A70',
-  lime: 'FFA1F01F',
+// ============================================================
+// Exportação Excel — réplica do Dashboard usado pela equipe,
+// uma única aba, mesmas cores/seções, sem filtro e sem linhas vazias.
+// ============================================================
+const X = {
+  navy: 'FF1F3864',
+  lightBlue: 'FFEAF1FA',
+  tableHead: 'FFBDD7EE',
+  sectionBlue: 'FF2E5395',
+  sectionGreen: 'FF548235',
+  yellow: 'FFFFE699',
+  gray: 'FF595959',
+  grayLight: 'FF808080',
   white: 'FFFFFFFF',
-  border: 'FFE2E8F0',
-  gray: 'FF64748B',
-  rowAlt: 'FFF8FAFC',
-  kpi: {
-    slate: { fill: 'FFEEF2F7', value: 'FF063A70' },
-    blue: { fill: 'FFEFF6FF', value: 'FF1D4ED8' },
-    green: { fill: 'FFF0FDF4', value: 'FF15803D' },
-    violet: { fill: 'FFF5F3FF', value: 'FF6D28D9' },
-  },
-  pagamento: {
-    green: { fill: 'FFF0FDF4', text: 'FF15803D' },
-    amber: { fill: 'FFFFFBEB', text: 'FF92400E' },
-    sky: { fill: 'FFEFF6FF', text: 'FF1D4ED8' },
-    slate: { fill: 'FFF1F5F9', text: 'FF475569' },
-  },
+  black: 'FF000000',
+  rowAlt: 'FFF4F7FB',
+  parcAlt: 'FFF1F8EE',
 } as const
 
-const thinBorder: Partial<ExcelJS.Border> = { style: 'thin', color: { argb: XLSX_COLORS.border } }
+const thinBorder: Partial<ExcelJS.Border> = { style: 'thin', color: { argb: 'FFC9C9C9' } }
+const borderAll: Partial<ExcelJS.Borders> = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder }
 
-function styleHeaderRow(row: ExcelJS.Row) {
-  row.eachCell((cell) => {
-    cell.font = { bold: true, color: { argb: XLSX_COLORS.white }, size: 11 }
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XLSX_COLORS.navy } }
-    cell.alignment = { vertical: 'middle', horizontal: 'left' }
-    cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder }
-  })
-  row.height = 22
-}
-
-function addKpiCard(
-  sheet: ExcelJS.Worksheet,
-  startCol: string,
-  labelRow: number,
-  label: string,
-  value: string,
-  tone: keyof typeof XLSX_COLORS.kpi,
-) {
-  const endCol = String.fromCharCode(startCol.charCodeAt(0) + 1)
-  const { fill, value: valueColor } = XLSX_COLORS.kpi[tone]
-
-  sheet.mergeCells(`${startCol}${labelRow}:${endCol}${labelRow}`)
-  const labelCell = sheet.getCell(`${startCol}${labelRow}`)
-  labelCell.value = label.toUpperCase()
-  labelCell.font = { size: 9, bold: true, color: { argb: XLSX_COLORS.gray } }
-  labelCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 }
-
-  sheet.mergeCells(`${startCol}${labelRow + 1}:${endCol}${labelRow + 2}`)
-  const valueCell = sheet.getCell(`${startCol}${labelRow + 1}`)
-  valueCell.value = value
-  valueCell.font = { size: 18, bold: true, color: { argb: valueColor } }
-  valueCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 }
-
-  for (let r = labelRow; r <= labelRow + 2; r++) {
-    for (const col of [startCol, endCol]) {
-      const cell = sheet.getCell(`${col}${r}`)
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } }
-      cell.border = {
-        top: r === labelRow ? thinBorder : undefined,
-        bottom: r === labelRow + 2 ? thinBorder : undefined,
-        left: col === startCol ? thinBorder : undefined,
-        right: col === endCol ? thinBorder : undefined,
-      }
-    }
-  }
-  sheet.getRow(labelRow).height = 18
-  sheet.getRow(labelRow + 1).height = 22
-  sheet.getRow(labelRow + 2).height = 22
+function fillCell(cell: ExcelJS.Cell, argb: string) {
+  cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } }
 }
 
 interface TotaisRelatorio {
@@ -137,8 +117,8 @@ interface TotaisRelatorio {
 
 async function exportXLSX(
   tickets: Ticket[],
-  parcerias: RegistroPrefeitura[],
   totais: TotaisRelatorio,
+  lojinha: number,
   mesLabel: string,
 ) {
   const { default: ExcelJS } = await import('exceljs')
@@ -146,146 +126,385 @@ async function exportXLSX(
   wb.creator = 'Espaço Maker · Cilla Tech Park'
   wb.created = new Date()
 
-  // ---------------- Aba 1: Resumo (dashboard) ----------------
-  const resumo = wb.addWorksheet('Resumo', { views: [{ showGridLines: false }] })
-  resumo.columns = [
-    { width: 2 }, { width: 22 }, { width: 20 }, { width: 3 },
-    { width: 22 }, { width: 20 }, { width: 3 },
-    { width: 22 }, { width: 20 }, { width: 3 },
-    { width: 22 }, { width: 20 }, { width: 2 },
+  const ws = wb.addWorksheet('Dashboard', { views: [{ showGridLines: false, state: 'frozen', ySplit: 2 }] })
+  ws.columns = [
+    { width: 12 }, { width: 22 }, { width: 34 }, { width: 15 },
+    { width: 32 }, { width: 15 }, { width: 11 }, { width: 8 }, { width: 8 }, { width: 8 },
   ]
 
-  resumo.mergeCells('B2:L2')
-  const title = resumo.getCell('B2')
-  title.value = 'Relatório Mensal — Espaço Maker'
-  title.font = { size: 18, bold: true, color: { argb: XLSX_COLORS.navy } }
-  resumo.getRow(2).height = 26
+  // ---------- Título ----------
+  ws.mergeCells('A1:J1')
+  const title = ws.getCell('A1')
+  title.value = `DASHBOARD — SETOR ESPAÇO MAKER (${mesLabel.toUpperCase()})`
+  title.font = { name: 'Arial', size: 14, bold: true, color: { argb: X.white } }
+  title.alignment = { horizontal: 'center', vertical: 'middle' }
+  fillCell(title, X.navy)
+  ws.getRow(1).height = 26
 
-  resumo.mergeCells('B3:L3')
-  const subtitle = resumo.getCell('B3')
-  subtitle.value = `${mesLabel} · gerado em ${new Date().toLocaleDateString('pt-BR')}`
-  subtitle.font = { size: 11, color: { argb: XLSX_COLORS.gray } }
+  ws.mergeCells('A2:J2')
+  const sub = ws.getCell('A2')
+  sub.value = `Gerado automaticamente a partir das demandas do sistema · ${new Date().toLocaleDateString('pt-BR')}`
+  sub.font = { name: 'Arial', size: 9, italic: true, color: { argb: X.gray } }
+  sub.alignment = { horizontal: 'center', vertical: 'middle' }
+  ws.getRow(2).height = 16
 
-  addKpiCard(resumo, 'B', 5, 'Total de projetos', String(totais.totalProjetos), 'slate')
-  addKpiCard(resumo, 'E', 5, 'Valor total orçado', formatarMoeda(totais.valorOrcado), 'blue')
-  addKpiCard(resumo, 'H', 5, 'Valor total recebido', formatarMoeda(totais.valorRecebido), 'green')
-  addKpiCard(resumo, 'K', 5, 'Parcerias (prefeitura)', String(totais.totalParcerias), 'violet')
+  // ---------- KPIs ----------
+  const kpiLabelRow = 4
+  const kpiValueRow = 5
+  const kpiSubRow = 7
+  const kpis: { label: string; value: number | string; numFmt?: string; sub: string; startCol: string; endCol: string }[] = [
+    { label: 'Total de Projetos', value: totais.totalProjetos, sub: 'todos os projetos do mês', startCol: 'A', endCol: 'B' },
+    { label: 'Valor Total Recebido (R$)', value: totais.valorRecebido, numFmt: '#,##0.00', sub: 'somente "Pedido em Entregue"', startCol: 'C', endCol: 'E' },
+    { label: 'Valor Total Orçado (R$)', value: totais.valorOrcado, numFmt: '#,##0.00', sub: 'demandas que abriram orçamento no mês', startCol: 'F', endCol: 'G' },
+    { label: 'Parcerias (Valor = 0)', value: totais.totalParcerias, sub: 'orçamentos cortesia do mês', startCol: 'H', endCol: 'J' },
+  ]
+  for (const k of kpis) {
+    ws.mergeCells(`${k.startCol}${kpiLabelRow}:${k.endCol}${kpiLabelRow}`)
+    const labelCell = ws.getCell(`${k.startCol}${kpiLabelRow}`)
+    labelCell.value = k.label
+    labelCell.font = { name: 'Arial', size: 10, bold: true, color: { argb: X.navy } }
+    labelCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+    fillCell(labelCell, X.lightBlue)
 
-  const breakdownStart = 10
-  resumo.mergeCells(`B${breakdownStart}:C${breakdownStart}`)
-  const breakdownTitle = resumo.getCell(`B${breakdownStart}`)
-  breakdownTitle.value = 'Projetos por status'
-  breakdownTitle.font = { size: 12, bold: true, color: { argb: XLSX_COLORS.navy } }
+    ws.mergeCells(`${k.startCol}${kpiValueRow}:${k.endCol}${kpiValueRow + 1}`)
+    const valueCell = ws.getCell(`${k.startCol}${kpiValueRow}`)
+    valueCell.value = k.value
+    valueCell.font = { name: 'Arial', size: 18, bold: true, color: { argb: X.black } }
+    valueCell.alignment = { horizontal: 'center', vertical: 'middle' }
+    if (k.numFmt) valueCell.numFmt = k.numFmt
+    fillCell(valueCell, X.lightBlue)
 
-  const contagemPorStatus = new Map<string, number>()
+    ws.mergeCells(`${k.startCol}${kpiSubRow}:${k.endCol}${kpiSubRow}`)
+    const subCell = ws.getCell(`${k.startCol}${kpiSubRow}`)
+    subCell.value = k.sub
+    subCell.font = { name: 'Arial', size: 8, italic: true, color: { argb: X.gray } }
+    subCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+    fillCell(subCell, X.lightBlue)
+  }
+  ws.getRow(kpiLabelRow).height = 20
+  ws.getRow(kpiValueRow).height = 26
+  ws.getRow(kpiValueRow + 1).height = 20
+  ws.getRow(kpiSubRow).height = 16
+
+  // ---------- Lojinha CTP + Total Geral ----------
+  const lojinhaRow = 9
+  ws.mergeCells(`A${lojinhaRow}:C${lojinhaRow}`)
+  const lojinhaLabel = ws.getCell(`A${lojinhaRow}`)
+  lojinhaLabel.value = 'Vendas da Lojinha CTP (manual)'
+  lojinhaLabel.font = { name: 'Arial', size: 10, bold: true, color: { argb: X.navy } }
+  lojinhaLabel.alignment = { horizontal: 'center', vertical: 'middle' }
+  fillCell(lojinhaLabel, X.lightBlue)
+
+  ws.mergeCells(`D${lojinhaRow}:E${lojinhaRow}`)
+  const lojinhaValue = ws.getCell(`D${lojinhaRow}`)
+  lojinhaValue.value = lojinha
+  lojinhaValue.numFmt = '#,##0.00'
+  lojinhaValue.font = { name: 'Arial', size: 13, bold: true, color: { argb: X.black } }
+  lojinhaValue.alignment = { horizontal: 'center', vertical: 'middle' }
+  fillCell(lojinhaValue, X.yellow)
+
+  ws.mergeCells(`F${lojinhaRow}:G${lojinhaRow}`)
+  const totalGeralLabel = ws.getCell(`F${lojinhaRow}`)
+  totalGeralLabel.value = 'Total Geral Recebido (R$)'
+  totalGeralLabel.font = { name: 'Arial', size: 10, bold: true, color: { argb: X.navy } }
+  totalGeralLabel.alignment = { horizontal: 'center', vertical: 'middle' }
+  fillCell(totalGeralLabel, X.lightBlue)
+
+  ws.mergeCells(`H${lojinhaRow}:J${lojinhaRow}`)
+  const totalGeralValue = ws.getCell(`H${lojinhaRow}`)
+  totalGeralValue.value = totais.valorRecebido + lojinha
+  totalGeralValue.numFmt = '#,##0.00'
+  totalGeralValue.font = { name: 'Arial', size: 13, bold: true, color: { argb: X.black } }
+  totalGeralValue.alignment = { horizontal: 'center', vertical: 'middle' }
+  fillCell(totalGeralValue, X.lightBlue)
+  ws.getRow(lojinhaRow).height = 24
+
+  // ---------- Resumo por status ----------
+  const resumoHeaderRow = 11
+  ws.mergeCells(`A${resumoHeaderRow}:J${resumoHeaderRow}`)
+  const resumoTitle = ws.getCell(`A${resumoHeaderRow}`)
+  resumoTitle.value = 'RESUMO POR STATUS'
+  resumoTitle.font = { name: 'Arial', size: 12, bold: true, color: { argb: X.white } }
+  resumoTitle.alignment = { horizontal: 'left', vertical: 'middle' }
+  fillCell(resumoTitle, X.sectionBlue)
+  ws.getRow(resumoHeaderRow).height = 20
+
+  const resumoColsRow = resumoHeaderRow + 1
+  ws.mergeCells(`A${resumoColsRow}:D${resumoColsRow}`)
+  ws.mergeCells(`E${resumoColsRow}:F${resumoColsRow}`)
+  ws.mergeCells(`G${resumoColsRow}:J${resumoColsRow}`)
+  ;[
+    ['A', 'Status'],
+    ['E', 'Qtde'],
+    ['G', 'Valor Orçado no Status (R$)'],
+  ].forEach(([col, label]) => {
+    const cell = ws.getCell(`${col}${resumoColsRow}`)
+    cell.value = label
+    cell.font = { name: 'Arial', size: 11, bold: true, color: { argb: X.black } }
+    cell.alignment = { horizontal: col === 'A' ? 'left' : 'center', vertical: 'middle' }
+    fillCell(cell, X.tableHead)
+    cell.border = borderAll
+  })
+  ws.getRow(resumoColsRow).height = 18
+
+  const contagemPorStatus = new Map<string, { qtde: number; valor: number }>()
+  for (const label of REPORT_STATUS_ORDER) contagemPorStatus.set(label, { qtde: 0, valor: 0 })
   for (const t of tickets) {
-    contagemPorStatus.set(t.status, (contagemPorStatus.get(t.status) ?? 0) + 1)
-  }
-  const headerBreakdownRow = resumo.getRow(breakdownStart + 1)
-  headerBreakdownRow.getCell(2).value = 'Status'
-  headerBreakdownRow.getCell(3).value = 'Quantidade'
-  styleHeaderRow(headerBreakdownRow)
-  resumo.mergeCells(`D${breakdownStart + 1}:L${breakdownStart + 1}`)
-
-  let r = breakdownStart + 2
-  Array.from(contagemPorStatus.entries())
-    .sort((a, b) => b[1] - a[1])
-    .forEach(([status, count], idx) => {
-      const row = resumo.getRow(r)
-      row.getCell(2).value = STATUS_LABELS[status as TicketStatus] ?? status
-      row.getCell(3).value = count
-      for (const col of [2, 3]) {
-        const cell = row.getCell(col)
-        cell.fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: idx % 2 === 0 ? XLSX_COLORS.white : XLSX_COLORS.rowAlt },
-        }
-        cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder }
-      }
-      r += 1
-    })
-  if (contagemPorStatus.size === 0) {
-    resumo.getRow(r).getCell(2).value = 'Nenhum projeto no período.'
-    r += 1
+    const label = getReportStatus(t)
+    const cur = contagemPorStatus.get(label)!
+    cur.qtde += 1
+    cur.valor += getValor(t)
   }
 
-  resumo.mergeCells(`B${r + 1}:L${r + 1}`)
-  const nota = resumo.getCell(`B${r + 1}`)
-  nota.value = 'Detalhamento completo de cada projeto na aba "Projetos". Parcerias com prefeituras na aba "Parcerias".'
-  nota.font = { size: 9, italic: true, color: { argb: XLSX_COLORS.gray } }
+  REPORT_STATUS_ORDER.forEach((label, i) => {
+    const r = resumoColsRow + 1 + i
+    const bg = i % 2 === 0 ? X.white : X.rowAlt
+    const { qtde, valor } = contagemPorStatus.get(label)!
+    ws.mergeCells(`A${r}:D${r}`)
+    ws.mergeCells(`E${r}:F${r}`)
+    ws.mergeCells(`G${r}:J${r}`)
+    const cLabel = ws.getCell(`A${r}`)
+    cLabel.value = label
+    cLabel.font = { name: 'Arial', size: 10 }
+    cLabel.alignment = { horizontal: 'left', vertical: 'middle' }
+    fillCell(cLabel, bg)
+    cLabel.border = borderAll
 
-  // ---------------- Aba 2: Projetos ----------------
-  const projetos = wb.addWorksheet('Projetos', { views: [{ state: 'frozen', ySplit: 1 }] })
-  projetos.columns = [
-    { header: 'Data', key: 'data', width: 13 },
-    { header: 'Solicitante', key: 'solicitante', width: 24 },
-    { header: 'Demanda', key: 'demanda', width: 38 },
-    { header: 'Status', key: 'status', width: 20 },
-    { header: 'Valor', key: 'valor', width: 16, style: { numFmt: '"R$" #,##0.00' } },
-    { header: 'Pagamento', key: 'pagamento', width: 16 },
-  ]
-  styleHeaderRow(projetos.getRow(1))
+    const cQtde = ws.getCell(`E${r}`)
+    cQtde.value = qtde
+    cQtde.font = { name: 'Arial', size: 10 }
+    cQtde.alignment = { horizontal: 'center', vertical: 'middle' }
+    fillCell(cQtde, bg)
+    cQtde.border = borderAll
 
-  tickets.forEach((t, idx) => {
-    const pag = getPagamentoInfo(t)
-    const row = projetos.addRow({
-      data: formatarData(t.data_criacao),
-      solicitante: t.solicitante_nome,
-      demanda: t.titulo,
-      status: STATUS_LABELS[t.status],
-      valor: getValor(t),
-      pagamento: pag.label,
-    })
-    const bg = idx % 2 === 0 ? XLSX_COLORS.white : XLSX_COLORS.rowAlt
-    row.eachCell((cell, colNumber) => {
-      cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder }
-      if (colNumber === 6) {
-        const tone = XLSX_COLORS.pagamento[pag.tone]
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: tone.fill } }
-        cell.font = { color: { argb: tone.text }, bold: true, size: 10 }
-      } else {
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bg } }
-      }
-    })
+    const cValor = ws.getCell(`G${r}`)
+    cValor.value = valor
+    cValor.numFmt = '#,##0.00;(#,##0.00);-'
+    cValor.font = { name: 'Arial', size: 10 }
+    cValor.alignment = { horizontal: 'right', vertical: 'middle' }
+    fillCell(cValor, bg)
+    cValor.border = borderAll
+
+    ws.getRow(r).height = 16
+  })
+  const resumoLastRow = resumoColsRow + REPORT_STATUS_ORDER.length
+
+  // ---------- Projetos do mês ----------
+  const projHeaderRow = resumoLastRow + 2
+  ws.mergeCells(`A${projHeaderRow}:J${projHeaderRow}`)
+  const projTitle = ws.getCell(`A${projHeaderRow}`)
+  projTitle.value = 'PROJETOS DO MÊS'
+  projTitle.font = { name: 'Arial', size: 12, bold: true, color: { argb: X.white } }
+  projTitle.alignment = { horizontal: 'left', vertical: 'middle' }
+  fillCell(projTitle, X.sectionBlue)
+  ws.getRow(projHeaderRow).height = 20
+
+  const projColsRow = projHeaderRow + 1
+  const projHeaders = ['Data', 'Cliente', 'Projeto/Produto', 'Valor Orçado (R$)', 'Status Atual', 'Valor Recebido (R$)', 'Parceria']
+  const colLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
+  colLetters.forEach((col, i) => {
+    const cell = ws.getCell(`${col}${projColsRow}`)
+    cell.value = projHeaders[i]
+    cell.font = { name: 'Arial', size: 10, bold: true }
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+    fillCell(cell, X.tableHead)
+    cell.border = borderAll
+  })
+  ws.mergeCells(`H${projColsRow}:J${projColsRow}`)
+  fillCell(ws.getCell(`H${projColsRow}`), X.tableHead)
+  ws.getCell(`H${projColsRow}`).border = borderAll
+  ws.getRow(projColsRow).height = 26
+
+  const firstDataRow = projColsRow + 1
+  tickets.forEach((t, i) => {
+    const r = firstDataRow + i
+    const bg = i % 2 === 0 ? X.white : X.rowAlt
+    const valor = getValor(t)
+    const recebido = getValorRecebido(t)
+    const parceria = isParceria(t)
+
+    const cData = ws.getCell(`A${r}`)
+    cData.value = new Date(t.data_criacao)
+    cData.numFmt = 'dd/mm/yyyy'
+    cData.font = { name: 'Arial', size: 10 }
+    cData.alignment = { horizontal: 'left', vertical: 'middle' }
+    fillCell(cData, bg)
+    cData.border = borderAll
+
+    const cCliente = ws.getCell(`B${r}`)
+    cCliente.value = t.solicitante_nome
+    cCliente.font = { name: 'Arial', size: 10 }
+    cCliente.alignment = { horizontal: 'left', vertical: 'middle' }
+    fillCell(cCliente, bg)
+    cCliente.border = borderAll
+
+    const cProjeto = ws.getCell(`C${r}`)
+    cProjeto.value = t.titulo
+    cProjeto.font = { name: 'Arial', size: 10 }
+    cProjeto.alignment = { horizontal: 'left', vertical: 'middle' }
+    fillCell(cProjeto, bg)
+    cProjeto.border = borderAll
+
+    const cValor = ws.getCell(`D${r}`)
+    cValor.value = valor
+    cValor.numFmt = '#,##0.00'
+    cValor.font = { name: 'Arial', size: 10 }
+    cValor.alignment = { horizontal: 'right', vertical: 'middle' }
+    fillCell(cValor, bg)
+    cValor.border = borderAll
+
+    const cStatus = ws.getCell(`E${r}`)
+    cStatus.value = getReportStatus(t)
+    cStatus.font = { name: 'Arial', size: 10 }
+    cStatus.alignment = { horizontal: 'left', vertical: 'middle' }
+    fillCell(cStatus, bg)
+    cStatus.border = borderAll
+
+    const cRecebido = ws.getCell(`F${r}`)
+    cRecebido.value = recebido
+    cRecebido.numFmt = '#,##0.00;(#,##0.00);-'
+    cRecebido.font = { name: 'Arial', size: 10 }
+    cRecebido.alignment = { horizontal: 'right', vertical: 'middle' }
+    fillCell(cRecebido, bg)
+    cRecebido.border = borderAll
+
+    const cParceria = ws.getCell(`G${r}`)
+    cParceria.value = parceria ? 'Sim' : 'Não'
+    cParceria.font = { name: 'Arial', size: 10 }
+    cParceria.alignment = { horizontal: 'center', vertical: 'middle' }
+    fillCell(cParceria, bg)
+    cParceria.border = borderAll
+
+    ws.mergeCells(`H${r}:J${r}`)
+    fillCell(ws.getCell(`H${r}`), bg)
+    ws.getCell(`H${r}`).border = borderAll
+
+    ws.getRow(r).height = 16
   })
 
+  const lastDataRow = firstDataRow + tickets.length - 1
+  const totalRow = lastDataRow + 1
   if (tickets.length > 0) {
-    const totalRow = projetos.addRow({
-      data: '', solicitante: '', demanda: '', status: 'Total', valor: tickets.reduce((s, t) => s + getValor(t), 0), pagamento: '',
-    })
-    totalRow.eachCell((cell) => {
-      cell.font = { bold: true, color: { argb: XLSX_COLORS.navy } }
-      cell.border = { top: { style: 'medium', color: { argb: XLSX_COLORS.navy } } }
-    })
-  }
-  projetos.autoFilter = { from: 'A1', to: 'F1' }
+    ws.mergeCells(`A${totalRow}:C${totalRow}`)
+    const totalLabel = ws.getCell(`A${totalRow}`)
+    totalLabel.value = 'Total'
+    totalLabel.font = { name: 'Arial', size: 10, bold: true, color: { argb: X.navy } }
+    totalLabel.alignment = { horizontal: 'left', vertical: 'middle' }
+    fillCell(totalLabel, X.tableHead)
+    totalLabel.border = borderAll
 
-  // ---------------- Aba 3: Parcerias ----------------
-  const parceriasSheet = wb.addWorksheet('Parcerias', { views: [{ state: 'frozen', ySplit: 1 }] })
-  parceriasSheet.columns = [
-    { header: 'Data', key: 'data', width: 13 },
-    { header: 'Município', key: 'municipio', width: 26 },
-    { header: 'Contato', key: 'contato', width: 24 },
-    { header: 'Status', key: 'status', width: 18 },
-  ]
-  styleHeaderRow(parceriasSheet.getRow(1))
-  parcerias.forEach((p, idx) => {
-    const row = parceriasSheet.addRow({
-      data: formatarData(p.criadoEm),
-      municipio: p.municipio,
-      contato: p.contato,
-      status: p.status,
-    })
-    const bg = idx % 2 === 0 ? XLSX_COLORS.white : XLSX_COLORS.rowAlt
-    row.eachCell((cell) => {
-      cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder }
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bg } }
-    })
-  })
-  if (parcerias.length > 0) {
-    parceriasSheet.autoFilter = { from: 'A1', to: 'D1' }
+    const totalOrcado = ws.getCell(`D${totalRow}`)
+    totalOrcado.value = { formula: `SUM(D${firstDataRow}:D${lastDataRow})` }
+    totalOrcado.numFmt = '#,##0.00'
+    totalOrcado.font = { name: 'Arial', size: 10, bold: true }
+    totalOrcado.alignment = { horizontal: 'right', vertical: 'middle' }
+    fillCell(totalOrcado, X.tableHead)
+    totalOrcado.border = borderAll
+
+    fillCell(ws.getCell(`E${totalRow}`), X.tableHead)
+    ws.getCell(`E${totalRow}`).border = borderAll
+
+    const totalRecebido = ws.getCell(`F${totalRow}`)
+    totalRecebido.value = { formula: `SUM(F${firstDataRow}:F${lastDataRow})` }
+    totalRecebido.numFmt = '#,##0.00'
+    totalRecebido.font = { name: 'Arial', size: 10, bold: true }
+    totalRecebido.alignment = { horizontal: 'right', vertical: 'middle' }
+    fillCell(totalRecebido, X.tableHead)
+    totalRecebido.border = borderAll
+
+    fillCell(ws.getCell(`G${totalRow}`), X.tableHead)
+    ws.getCell(`G${totalRow}`).border = borderAll
+    ws.mergeCells(`H${totalRow}:J${totalRow}`)
+    fillCell(ws.getCell(`H${totalRow}`), X.tableHead)
+    ws.getCell(`H${totalRow}`).border = borderAll
   }
+
+  // ---------- Parcerias ----------
+  const parcerias = tickets.filter(isParceria)
+  const parcHeaderRow = (tickets.length > 0 ? totalRow : lastDataRow) + 2
+  ws.mergeCells(`A${parcHeaderRow}:J${parcHeaderRow}`)
+  const parcTitle = ws.getCell(`A${parcHeaderRow}`)
+  parcTitle.value = 'PARCERIAS — Projetos com Valor = R$ 0,00'
+  parcTitle.font = { name: 'Arial', size: 12, bold: true, color: { argb: X.white } }
+  parcTitle.alignment = { horizontal: 'left', vertical: 'middle' }
+  fillCell(parcTitle, X.sectionGreen)
+  ws.getRow(parcHeaderRow).height = 20
+
+  const parcColsRow = parcHeaderRow + 1
+  const parcCols: [string, string][] = [
+    ['A', 'Data'],
+    ['B', 'Cliente'],
+    ['C', 'Projeto/Produto'],
+    ['G', 'Status Atual'],
+  ]
+  ws.mergeCells(`C${parcColsRow}:F${parcColsRow}`)
+  ws.mergeCells(`G${parcColsRow}:J${parcColsRow}`)
+  parcCols.forEach(([col, label]) => {
+    const cell = ws.getCell(`${col}${parcColsRow}`)
+    cell.value = label
+    cell.font = { name: 'Arial', size: 10, bold: true }
+    cell.alignment = { horizontal: 'center', vertical: 'middle' }
+    fillCell(cell, X.tableHead)
+    cell.border = borderAll
+  })
+  ws.getRow(parcColsRow).height = 18
+
+  if (parcerias.length > 0) {
+    parcerias.forEach((t, i) => {
+      const r = parcColsRow + 1 + i
+      const bg = i % 2 === 0 ? X.white : X.parcAlt
+      ws.mergeCells(`C${r}:F${r}`)
+      ws.mergeCells(`G${r}:J${r}`)
+
+      const cData = ws.getCell(`A${r}`)
+      cData.value = new Date(t.data_criacao)
+      cData.numFmt = 'dd/mm/yyyy'
+      cData.font = { name: 'Arial', size: 10 }
+      fillCell(cData, bg)
+      cData.border = borderAll
+
+      const cCliente = ws.getCell(`B${r}`)
+      cCliente.value = t.solicitante_nome
+      cCliente.font = { name: 'Arial', size: 10 }
+      fillCell(cCliente, bg)
+      cCliente.border = borderAll
+
+      const cProjeto = ws.getCell(`C${r}`)
+      cProjeto.value = t.titulo
+      cProjeto.font = { name: 'Arial', size: 10 }
+      fillCell(cProjeto, bg)
+      cProjeto.border = borderAll
+
+      const cStatus = ws.getCell(`G${r}`)
+      cStatus.value = getReportStatus(t)
+      cStatus.font = { name: 'Arial', size: 10 }
+      fillCell(cStatus, bg)
+      cStatus.border = borderAll
+
+      ws.getRow(r).height = 16
+    })
+  } else {
+    ws.mergeCells(`A${parcColsRow + 1}:J${parcColsRow + 1}`)
+    const emptyCell = ws.getCell(`A${parcColsRow + 1}`)
+    emptyCell.value = 'Nenhuma parceria neste mês.'
+    emptyCell.font = { name: 'Arial', size: 10, italic: true, color: { argb: X.gray } }
+    emptyCell.alignment = { horizontal: 'center', vertical: 'middle' }
+    ws.getRow(parcColsRow + 1).height = 16
+  }
+  const parcLastRow = parcColsRow + Math.max(parcerias.length, 1)
+
+  // ---------- Observações ----------
+  const obsRow = parcLastRow + 2
+  ws.mergeCells(`A${obsRow}:J${obsRow}`)
+  const obs = ws.getCell(`A${obsRow}`)
+  obs.value =
+    'Valor Total Recebido = soma só das demandas com status "Pedido em Entregue".  •  ' +
+    'Valor Total Orçado = soma de todas as demandas que abriram orçamento no mês, qualquer status.  •  ' +
+    'Parceria = projetos com valor R$ 0,00 (orçamento cortesia).  •  ' +
+    'Total Geral Recebido = Valor Total Recebido + Vendas da Lojinha CTP (célula amarela, manual).'
+  obs.font = { name: 'Arial', size: 8, italic: true, color: { argb: X.grayLight } }
+  obs.alignment = { horizontal: 'left', vertical: 'top', wrapText: true }
+  ws.getRow(obsRow).height = 28
 
   const buffer = await wb.xlsx.writeBuffer()
   const blob = new Blob([buffer], {
@@ -294,7 +513,7 @@ async function exportXLSX(
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `relatorio-mensal-${mesLabel.replace(/\s+/g, '-').toLowerCase()}.xlsx`
+  a.download = `dashboard-espaco-maker-${mesLabel.replace(/\s+/g, '-').toLowerCase()}.xlsx`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -302,7 +521,7 @@ async function exportXLSX(
 export function RelatorioMensalPage() {
   const [mes, setMes] = useState(mesAtualStr())
   const [tickets, setTickets] = useState<Ticket[]>([])
-  const [parcerias, setParcerias] = useState<RegistroPrefeitura[]>([])
+  const [lojinha, setLojinha] = useState<number>(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const printRef = useRef<HTMLDivElement>(null)
@@ -313,22 +532,11 @@ export function RelatorioMensalPage() {
     try {
       setLoading(true)
       setError(null)
-      const [{ tickets: list }, prefeituraList] = await Promise.all([
-        listTickets(
-          { dataCriacaoInicial: inicio, dataCriacaoFinal: fim },
-          { limit: 5000, orderBy: 'data_criacao', orderDirection: 'asc' },
-        ),
-        listPrefeitura(),
-      ])
-      setTickets(
-        list.filter((t) => t.status !== 'cancelada' && !isSolicitanteCTP(t.solicitante_nome)),
+      const { tickets: list } = await listTickets(
+        { dataCriacaoInicial: inicio, dataCriacaoFinal: fim },
+        { limit: 5000, orderBy: 'data_criacao', orderDirection: 'asc' },
       )
-      setParcerias(
-        prefeituraList.filter((p) => {
-          const criado = p.criadoEm.slice(0, 10)
-          return criado >= inicio && criado <= fim
-        }),
-      )
+      setTickets(list)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao carregar relatório mensal.'
       setError(message)
@@ -342,19 +550,27 @@ export function RelatorioMensalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mes])
 
-  const totais = useMemo(() => {
+  const totais = useMemo<TotaisRelatorio>(() => {
     const valorOrcado = tickets.reduce((sum, t) => sum + getValor(t), 0)
-    const valorRecebido = tickets.reduce((sum, t) => {
-      const pago = t.tipo_receita !== 'contrapartida' && !t.receita_recorrente && t.pagamento_pago_em
-      return sum + (pago ? getValor(t) : 0)
-    }, 0)
-    return {
-      totalProjetos: tickets.length,
-      valorOrcado,
-      valorRecebido,
-      totalParcerias: parcerias.length,
+    const valorRecebido = tickets.reduce((sum, t) => sum + getValorRecebido(t), 0)
+    const totalParcerias = tickets.filter(isParceria).length
+    return { totalProjetos: tickets.length, valorOrcado, valorRecebido, totalParcerias }
+  }, [tickets])
+
+  const totalGeralRecebido = totais.valorRecebido + lojinha
+  const parcerias = useMemo(() => tickets.filter(isParceria), [tickets])
+
+  const resumoPorStatus = useMemo(() => {
+    const map = new Map<string, { qtde: number; valor: number }>()
+    for (const label of REPORT_STATUS_ORDER) map.set(label, { qtde: 0, valor: 0 })
+    for (const t of tickets) {
+      const label = getReportStatus(t)
+      const cur = map.get(label)!
+      cur.qtde += 1
+      cur.valor += getValor(t)
     }
-  }, [tickets, parcerias])
+    return REPORT_STATUS_ORDER.map((label) => ({ label, ...map.get(label)! }))
+  }, [tickets])
 
   const handleExportPDF = () => {
     if (!printRef.current) return
@@ -366,26 +582,27 @@ export function RelatorioMensalPage() {
     win.document.write(`
       <!DOCTYPE html><html><head><meta charset="utf-8"><title>${document.title}</title>
       <style>
-        body { font-family: system-ui, sans-serif; font-size: 12px; padding: 24px; color: #0F172A; }
+        body { font-family: Arial, sans-serif; font-size: 12px; padding: 24px; color: #0F172A; }
         h1 { font-size: 18px; margin-bottom: 2px; }
         h2 { font-size: 13px; margin: 20px 0 8px; }
         p.sub { color: #64748B; margin-top: 0; margin-bottom: 20px; }
-        .summary { display: flex; gap: 16px; margin-bottom: 20px; }
-        .summary div { border: 1px solid #E2E8F0; border-radius: 8px; padding: 10px 14px; flex: 1; }
+        .summary { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+        .summary div { border: 1px solid #E2E8F0; border-radius: 8px; padding: 10px 14px; flex: 1; min-width: 140px; }
         .summary p { margin: 0; }
         .summary .label { font-size: 10px; text-transform: uppercase; color: #64748B; }
         .summary .value { font-size: 16px; font-weight: 700; margin-top: 4px; }
         table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
         th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
-        th { background: #f1f5f9; }
+        th { background: #BDD7EE; }
       </style></head><body>
-        <h1>Relatório mensal — ${mesLabel}</h1>
-        <p class="sub">Espaço Maker · gerado em ${new Date().toLocaleDateString('pt-BR')}</p>
+        <h1>Dashboard — Espaço Maker (${mesLabel})</h1>
+        <p class="sub">Gerado em ${new Date().toLocaleDateString('pt-BR')}</p>
         <div class="summary">
           <div><p class="label">Total de projetos</p><p class="value">${totais.totalProjetos}</p></div>
-          <div><p class="label">Valor orçado</p><p class="value">${formatarMoeda(totais.valorOrcado)}</p></div>
           <div><p class="label">Valor recebido</p><p class="value">${formatarMoeda(totais.valorRecebido)}</p></div>
+          <div><p class="label">Valor orçado</p><p class="value">${formatarMoeda(totais.valorOrcado)}</p></div>
           <div><p class="label">Parcerias</p><p class="value">${totais.totalParcerias}</p></div>
+          <div><p class="label">Total geral recebido</p><p class="value">${formatarMoeda(totalGeralRecebido)}</p></div>
         </div>
         <h2>Projetos do mês</h2>
         ${printContent}
@@ -422,10 +639,23 @@ export function RelatorioMensalPage() {
               style={{ width: 'auto' }}
             />
           </div>
+          <div>
+            <label className="ctp-label">Vendas da Lojinha CTP (manual)</label>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={lojinha}
+              onChange={(e) => setLojinha(Number(e.target.value) || 0)}
+              className="ctp-input"
+              style={{ width: '160px' }}
+              placeholder="0,00"
+            />
+          </div>
           <div className="ml-auto flex gap-2">
             <button
               type="button"
-              onClick={() => void exportXLSX(tickets, parcerias, totais, mesLabel)}
+              onClick={() => void exportXLSX(tickets, totais, lojinha, mesLabel)}
               className="btn btn-outline btn-sm"
             >
               Exportar Excel
@@ -452,13 +682,6 @@ export function RelatorioMensalPage() {
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <MetricCard label="Total de projetos" value={totais.totalProjetos} icon={FolderKanban} />
                 <MetricCard
-                  label="Valor total orçado"
-                  value={formatarMoeda(totais.valorOrcado)}
-                  icon={Wallet}
-                  iconBg="#EFF6FF"
-                  iconColor="#1D4ED8"
-                />
-                <MetricCard
                   label="Valor total recebido"
                   value={formatarMoeda(totais.valorRecebido)}
                   icon={PiggyBank}
@@ -466,12 +689,66 @@ export function RelatorioMensalPage() {
                   iconColor="#15803D"
                 />
                 <MetricCard
-                  label="Parcerias (prefeitura)"
+                  label="Valor total orçado"
+                  value={formatarMoeda(totais.valorOrcado)}
+                  icon={Wallet}
+                  iconBg="#EFF6FF"
+                  iconColor="#1D4ED8"
+                />
+                <MetricCard
+                  label="Parcerias (valor = 0)"
                   value={totais.totalParcerias}
-                  icon={Building2}
+                  icon={HeartHandshake}
                   iconBg="#F5F3FF"
                   iconColor="#6D28D9"
                 />
+              </div>
+
+              <div className="ctp-card flex flex-wrap items-center justify-between gap-3 p-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                    Total geral recebido
+                  </p>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Valor total recebido + Vendas da Lojinha CTP
+                  </p>
+                </div>
+                <p className="text-2xl font-bold" style={{ color: 'var(--ctp-navy)' }}>
+                  {formatarMoeda(totalGeralRecebido)}
+                </p>
+              </div>
+
+              <div className="ctp-card overflow-hidden">
+                <div className="border-b border-slate-100 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Resumo por status</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="ctp-table w-full">
+                    <thead>
+                      <tr>
+                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3">Qtde</th>
+                        <th className="px-4 py-3">Valor orçado no status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {resumoPorStatus.map((r) => {
+                        const tone = STATUS_TONES[r.label]
+                        return (
+                          <tr key={r.label}>
+                            <td className="px-4 py-3">
+                              <span className="badge" style={{ background: tone.bg, color: tone.color }}>
+                                {r.label}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-slate-700">{r.qtde}</td>
+                            <td className="px-4 py-3 font-medium text-slate-800">{formatarMoeda(r.valor)}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
               <div className="ctp-card overflow-hidden">
@@ -485,7 +762,7 @@ export function RelatorioMensalPage() {
                   <table className="ctp-table w-full">
                     <thead>
                       <tr>
-                        {COLS.map((c) => (
+                        {PROJ_COLS.map((c) => (
                           <th key={c} className="px-4 py-3">
                             {c}
                           </th>
@@ -494,8 +771,10 @@ export function RelatorioMensalPage() {
                     </thead>
                     <tbody>
                       {tickets.map((t) => {
-                        const pag = getPagamentoInfo(t)
-                        const tone = PAGAMENTO_TONES[pag.tone]
+                        const status = getReportStatus(t)
+                        const tone = STATUS_TONES[status]
+                        const recebido = getValorRecebido(t)
+                        const parceria = isParceria(t)
                         return (
                           <tr key={t.id}>
                             <td className="px-4 py-3 text-slate-700">{formatarData(t.data_criacao)}</td>
@@ -504,25 +783,21 @@ export function RelatorioMensalPage() {
                               <Link to={`/demandas/${t.id}`} className="font-medium text-slate-800 hover:underline">
                                 {t.titulo}
                               </Link>
-                              {t.descricao && (
-                                <p className="mt-0.5 text-xs text-slate-500 line-clamp-1">{t.descricao}</p>
-                              )}
-                            </td>
-                            <td className="px-4 py-3">
-                              <TicketStatusPill status={t.status} />
                             </td>
                             <td className="px-4 py-3 font-medium text-slate-800">{formatarMoeda(getValor(t))}</td>
                             <td className="px-4 py-3">
                               <span className="badge" style={{ background: tone.bg, color: tone.color }}>
-                                {pag.label}
+                                {status}
                               </span>
                             </td>
+                            <td className="px-4 py-3 text-slate-700">{recebido > 0 ? formatarMoeda(recebido) : '—'}</td>
+                            <td className="px-4 py-3 text-slate-700">{parceria ? 'Sim' : 'Não'}</td>
                           </tr>
                         )
                       })}
                       {tickets.length === 0 && (
                         <tr>
-                          <td colSpan={COLS.length} className="px-4 py-8 text-center text-sm text-slate-500">
+                          <td colSpan={PROJ_COLS.length} className="px-4 py-8 text-center text-sm text-slate-500">
                             Nenhum projeto criado em {mesLabel}.
                           </td>
                         </tr>
@@ -535,7 +810,7 @@ export function RelatorioMensalPage() {
               <div className="ctp-card overflow-hidden">
                 <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
                   <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Parcerias com prefeituras em {mesLabel}
+                    Parcerias — projetos com valor R$ 0,00
                   </p>
                   <span className="text-xs text-slate-500">{parcerias.length} parceria(s)</span>
                 </div>
@@ -544,24 +819,24 @@ export function RelatorioMensalPage() {
                     <thead>
                       <tr>
                         <th className="px-4 py-3">Data</th>
-                        <th className="px-4 py-3">Município</th>
-                        <th className="px-4 py-3">Contato</th>
-                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3">Cliente</th>
+                        <th className="px-4 py-3">Projeto/Produto</th>
+                        <th className="px-4 py-3">Status Atual</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {parcerias.map((p) => (
-                        <tr key={p.id}>
-                          <td className="px-4 py-3 text-slate-700">{formatarData(p.criadoEm)}</td>
-                          <td className="px-4 py-3 font-medium text-slate-800">{p.municipio}</td>
-                          <td className="px-4 py-3 text-slate-700">{p.contato}</td>
-                          <td className="px-4 py-3 text-slate-700">{p.status}</td>
+                      {parcerias.map((t) => (
+                        <tr key={t.id}>
+                          <td className="px-4 py-3 text-slate-700">{formatarData(t.data_criacao)}</td>
+                          <td className="px-4 py-3 font-medium text-slate-800">{t.solicitante_nome}</td>
+                          <td className="px-4 py-3 text-slate-700">{t.titulo}</td>
+                          <td className="px-4 py-3 text-slate-700">{getReportStatus(t)}</td>
                         </tr>
                       ))}
                       {parcerias.length === 0 && (
                         <tr>
                           <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
-                            Nenhuma parceria registrada em {mesLabel}.
+                            Nenhuma parceria neste mês.
                           </td>
                         </tr>
                       )}
@@ -575,25 +850,23 @@ export function RelatorioMensalPage() {
                 <table>
                   <thead>
                     <tr>
-                      {COLS.map((c) => (
+                      {PROJ_COLS.map((c) => (
                         <th key={c}>{c}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {tickets.map((t) => {
-                      const pag = getPagamentoInfo(t)
-                      return (
-                        <tr key={t.id}>
-                          <td>{formatarData(t.data_criacao)}</td>
-                          <td>{t.solicitante_nome}</td>
-                          <td>{t.titulo}</td>
-                          <td>{STATUS_LABELS[t.status]}</td>
-                          <td>{formatarMoeda(getValor(t))}</td>
-                          <td>{pag.label}</td>
-                        </tr>
-                      )
-                    })}
+                    {tickets.map((t) => (
+                      <tr key={t.id}>
+                        <td>{formatarData(t.data_criacao)}</td>
+                        <td>{t.solicitante_nome}</td>
+                        <td>{t.titulo}</td>
+                        <td>{formatarMoeda(getValor(t))}</td>
+                        <td>{getReportStatus(t)}</td>
+                        <td>{getValorRecebido(t) > 0 ? formatarMoeda(getValorRecebido(t)) : '—'}</td>
+                        <td>{isParceria(t) ? 'Sim' : 'Não'}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
