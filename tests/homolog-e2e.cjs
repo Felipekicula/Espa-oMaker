@@ -71,11 +71,12 @@ const hhmm = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${
   console.log(`Login: ${me.name}. Agenda usada: ${target.name}.\n`)
 
   // ---------- registro do que esta ferramenta cria, para limpar só isso ----------
-  let state = { url: URL_, items: [], events: [], availability: null }
+  let state = { url: URL_, items: [], events: [], timeOff: [], availability: null }
   const save = () => fs.writeFileSync(stateFile, JSON.stringify(state))
   const setAvailability = (personId, rows) => must('POST', 'rpc/maker_save_availability', { person_id: personId, slots: rows.map(({ weekday, period, starts_at, ends_at }) => ({ weekday, period, starts_at, ends_at })) })
   const undo = async s => {
     if (s.availability) await setAvailability(s.availability.userId, s.availability.rows)
+    if (s.timeOff && s.timeOff.length) await must('DELETE', `maker_time_off?id=in.(${s.timeOff.join(',')})`)
     if (s.items.length) { await must('DELETE', `maker_blocks?work_item_id=in.(${s.items.join(',')})`); await must('DELETE', `maker_work_items?id=in.(${s.items.join(',')})`) }
     if (s.events.length) {
       const prep = await must('GET', `maker_work_items?select=id&event_id=in.(${s.events.join(',')})&title=like.AUTO%20*`)
@@ -320,6 +321,127 @@ const hhmm = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${
       return `bloco de ${overdue.minutes} min de hoje (${periodName}) remanejado para ${br(wd(3))}`
     })
     await setAvailability(target.id, standard).catch(() => {})
+
+    // ---------- planejamento assistido (exige migration-maker-assisted-planning.sql) ----------
+    const assisted = (await rest('GET', 'maker_time_off?select=id&limit=1')).ok
+    if (!assisted) record('Planejamento assistido', null, 'migration-maker-assisted-planning.sql ainda não foi aplicada neste banco')
+    else {
+      const planned = new Set((await must('GET', 'maker_work_items?select=ticket_id&ticket_id=not.is.null')).map(i => i.ticket_id))
+      const free = allTickets.filter(t => !['entregue', 'cancelada'].includes(t.status) && !planned.has(t.id) && /^Demanda ficticia \d/.test(t.titulo))
+      const [A, B, C] = free
+      const adopt = async ticket => { const ids = (await must('GET', `maker_work_items?select=id&ticket_id=eq.${ticket.id}`)).map(i => i.id); state.items.push(...ids.filter(i => !state.items.includes(i))); save(); return ids }
+      const cardOf = async ticket => (await must('GET', `maker_work_items?select=*&ticket_id=eq.${ticket.id}&scope=eq.demanda&order=created_at`)).at(-1)
+      const reservedByPeriod = async () => { const m = {}; for (const b of await must('GET', `maker_blocks?select=day,period,minutes&user_id=eq.${target.id}&status=eq.planned&day=gte.${wd(7)}&day=lte.${wd(11)}`)) m[b.day + '|' + b.period] = (m[b.day + '|' + b.period] ?? 0) + b.minutes; return m }
+      const limitOf = async key => { const [d, p] = key.split('|'); return (await must('POST', 'rpc/maker_slack_limit', { person: target.id, d, p })) }
+      const withinSlack = async () => { const now = await reservedByPeriod(); for (const key of Object.keys(now)) assert.ok(now[key] <= await limitOf(key), `${key}: ${now[key]} min reservados passam do limite sem folga`); return now }
+      const openPlanner = async ticket => {
+        await openWeek(); await page.getByText(/Fora do planejamento · \d+/).click()
+        await page.locator('.board-more-row', { hasText: ticket.titulo }).getByRole('button', { name: 'Planejar demanda inteira' }).click()
+        await dialog.getByRole('heading', { name: 'Planejar demanda inteira: ' + ticket.titulo }).waitFor(T)
+        await dialog.getByLabel('Responsável').selectOption(target.id); await dialog.getByLabel('Não começar antes de').fill(wd(7))
+      }
+      const proposalRegion = dialog.getByRole('region', { name: 'Proposta' })
+      if (!C) record('Planejamento assistido', null, 'faltam demandas fictícias em aberto sem etapas para o teste')
+      else {
+        await step('Assistido: a proposta não grava nada; ao aceitar, cartão, blocos e histórico entram juntos', async () => {
+          const prazo = (await must('GET', `tickets?select=data_entrega&id=eq.${A.id}`))[0].data_entrega
+          await openPlanner(A); await dialog.getByLabel('Trabalho previsto · horas').fill('9')
+          assert.deepEqual(await proposalRegion.locator('.planner-table tbody tr td:first-child').allInnerTexts(), ['Só a estimativa', 'Com a margem', 'Com a margem e a folga'])
+          assert.equal(await cardOf(A), undefined, 'nada no banco antes do aceite')
+          await dialog.getByRole('button', { name: 'Aceitar proposta' }).click(); await notice.filter({ hasText: 'Proposta aceita: ' + A.titulo }).filter({ hasText: 'O prazo oficial não foi alterado' }).waitFor(T)
+          await adopt(A); const card = await cardOf(A), blocks = await blocksOf(card.id)
+          assert.deepEqual([card.scope, card.estimate_mode, card.work_minutes, card.protection_minutes, card.remaining_minutes, card.assignee_id], ['demanda', 'estimativa', 540, 120, 660, target.id])
+          assert.equal(blocks.reduce((n, b) => n + b.minutes, 0), 660); assert.equal(blocks.filter(b => b.purpose === 'protecao').reduce((n, b) => n + b.minutes, 0), 120)
+          const log = await must('GET', `maker_estimate_log?select=reason,work_minutes,protection_minutes&work_item_id=eq.${card.id}`)
+          assert.deepEqual(log, [{ reason: 'inicial', work_minutes: 540, protection_minutes: 120 }])
+          assert.equal((await must('GET', `tickets?select=data_entrega&id=eq.${A.id}`))[0].data_entrega, prazo, 'aceitar reservas não altera o prazo oficial')
+          await withinSlack(); return `9h + 2h de proteção em ${new Set(blocks.map(b => b.day + b.period)).size} períodos`
+        })
+        await step('Assistido: uma segunda proposta não consome a folga protegida', async () => {
+          await openPlanner(B); await dialog.getByLabel('Trabalho previsto · horas').fill('6'); await dialog.getByLabel('Margem de erro · %').fill('0')
+          await dialog.getByRole('button', { name: 'Aceitar proposta' }).click(); await notice.filter({ hasText: 'Proposta aceita: ' + B.titulo }).waitFor(T)
+          await adopt(B); const now = await withinSlack()
+          return `${Object.keys(now).length} períodos ocupados, todos dentro do limite sem folga`
+        })
+        await step('Assistido: "não sei ainda" com conflito de outra sessão não grava nada; depois reserva só a investigação', async () => {
+          await openPlanner(C); await dialog.getByLabel('Não sei ainda').check()
+          await proposalRegion.getByText('Sem previsão de conclusão:').waitFor(T); assert.equal(await proposalRegion.locator('.planner-table').count(), 0)
+          await dialog.getByLabel('Revisar a estimativa em').fill(today)
+          const label = await proposalRegion.locator('.planner-blocks li span').first().innerText(), [dayBr, per] = label.split(' · ')
+          const d = dayBr.split('/').reverse().join('-'), p = per === 'manhã' ? 'manha' : 'tarde'
+          // Outra sessão ocupa o período sugerido inteiro depois de a proposta ter sido calculada.
+          const capacity = await must('POST', 'rpc/maker_period_capacity', { person: target.id, d, p }), taken = (await reservedByPeriod())[d + '|' + p] ?? 0
+          await must('POST', 'maker_blocks', { work_item_id: id(N.conflito), user_id: target.id, day: d, period: p, minutes: capacity - taken })
+          await dialog.getByRole('button', { name: 'Aceitar proposta' }).click()
+          await dialog.getByRole('alert').filter({ hasText: 'Não foi gravado' }).filter({ hasText: 'Nada foi reservado' }).waitFor(T)
+          assert.equal(await cardOf(C), undefined, 'recusa do banco não deixa cartão nem bloco')
+          const again = await proposalRegion.locator('.planner-blocks li span').first().innerText(); assert.notEqual(again, label, 'a proposta foi recalculada com a agenda atual')
+          await dialog.getByRole('button', { name: 'Aceitar proposta' }).click(); await notice.filter({ hasText: 'Revisão da estimativa em' }).waitFor(T)
+          await adopt(C); const card = await cardOf(C), blocks = await blocksOf(card.id)
+          assert.deepEqual([card.estimate_mode, card.work_minutes, card.review_on], ['indefinida', null, today]); assert.deepEqual(blocks.map(b => [b.purpose, b.minutes, b.status]), [['investigacao', 120, 'planned']])
+          return `primeira sugestão ${label} ocupada por outra sessão; aceita em ${again}`
+        })
+        await step('Assistido: "Revisar estimativa" tem alerta próprio; a faixa substitui a investigação e guarda o histórico', async () => {
+          await openWeek(); await side.getByText(/Revisar estimativa · \d+/).waitFor(T)
+          assert.equal(await side.locator('.board-item.missed', { hasText: C.titulo }).count(), 0, 'revisão não aparece como atraso')
+          await side.locator('.board-item.review', { hasText: C.titulo }).click(); await dialog.getByRole('button', { name: 'Definir estimativa' }).click()
+          await dialog.getByLabel('Tenho uma faixa').check(); await dialog.getByLabel('Não começar antes de').fill(wd(7))
+          await dialog.getByLabel('Cenário menor · horas').fill('3'); await dialog.getByLabel('Cenário maior · horas').fill('5')
+          assert.deepEqual(await proposalRegion.locator('.planner-table tbody tr td:first-child').allInnerTexts(), ['Se for o cenário menor', 'Se for o cenário maior'])
+          await dialog.getByRole('button', { name: 'Aceitar proposta' }).click(); await notice.filter({ hasText: 'Proposta aceita: ' + C.titulo }).waitFor(T)
+          const card = await cardOf(C), blocks = await blocksOf(card.id), active = blocks.filter(b => b.status === 'planned')
+          assert.deepEqual([card.estimate_mode, card.work_minutes, card.protection_minutes, card.remaining_minutes], ['faixa', 180, 120, 300])
+          assert.equal(blocks.find(b => b.purpose === 'investigacao').status, 'superseded')
+          assert.equal(active.filter(b => b.purpose === 'trabalho').reduce((n, b) => n + b.minutes, 0), 180); assert.equal(active.filter(b => b.purpose === 'protecao').reduce((n, b) => n + b.minutes, 0), 120)
+          const log = await must('GET', `maker_estimate_log?select=reason,mode,low_minutes,high_minutes&work_item_id=eq.${card.id}&order=created_at`)
+          assert.deepEqual(log, [{ reason: 'inicial', mode: 'indefinida', low_minutes: null, high_minutes: null }, { reason: 'revisao', mode: 'faixa', low_minutes: 180, high_minutes: 300 }])
+          await withinSlack()
+        })
+        await step('Assistido: banco impede demanda inteira e etapas da mesma demanda ao mesmo tempo', async () => {
+          const r = await rest('POST', 'maker_work_items', { title: N.cortar + ' etapa', ticket_id: A.id, assignee_id: target.id, remaining_minutes: 60 }, 'return=representation')
+          if (r.ok) { state.items.push(r.data[0].id); save() }
+          assert.equal(r.ok, false); assert.match(r.message || '', /demanda inteira/)
+          const again = await rest('POST', 'rpc/maker_accept_plan', { plan: { ticket_id: A.id, title: A.titulo, assignee_id: target.id, scope: 'demanda', mode: 'estimativa', work_minutes: 60, blocks: [{ day: wd(11), period: 'manha', minutes: 60 }] } })
+          assert.equal(again.ok, false)
+        })
+        await step('Assistido: transformar em etapas repassa as reservas sem duplicar horas', async () => {
+          const card = await cardOf(A), before = await reservedByPeriod(), had = (await blocksOf(card.id)).filter(b => b.status === 'planned').reduce((n, b) => n + b.minutes, 0)
+          await openWeek(); await forward(weeksAhead + 1)
+          await page.locator('.board-card', { hasText: A.titulo }).first().click(); await dialog.getByRole('button', { name: 'Transformar em etapas' }).click()
+          await dialog.getByLabel('Nome da etapa 1').fill(N.cortar + ' A'); await dialog.getByLabel('Trabalho da etapa 1 em horas').fill('5')
+          await dialog.getByLabel('Nome da etapa 2').fill(N.cortar + ' B'); await dialog.getByLabel('Trabalho da etapa 2 em horas').fill('4'); await dialog.getByLabel('Proteção da etapa 2 em horas').fill('2')
+          await dialog.getByRole('button', { name: 'Transformar em etapas' }).click(); await notice.filter({ hasText: 'foi transformada em 2 etapas' }).waitFor(T)
+          const ids = await adopt(A), after = await reservedByPeriod(), old = (await must('GET', `maker_work_items?select=status,converted_at&id=eq.${card.id}`))[0]
+          assert.equal(old.status, 'completed'); assert.ok(old.converted_at)
+          assert.deepEqual(after, before, 'cada período continua com exatamente as mesmas horas reservadas')
+          const steps = await must('GET', `maker_work_items?select=id,title,scope,status,remaining_minutes&ticket_id=eq.${A.id}&status=eq.pending`)
+          assert.deepEqual(steps.map(s => [s.scope, s.remaining_minutes]).sort(), [['etapa', 300], ['etapa', 360]])
+          let moved = 0; for (const s of steps) moved += (await blocksOf(s.id)).filter(b => b.status === 'planned').reduce((n, b) => n + b.minutes, 0)
+          assert.equal(moved, had); assert.equal((await blocksOf(card.id)).filter(b => b.status === 'planned').length, 0)
+          return `${had / 60}h de reservas passaram para ${steps.length} etapas (${ids.length} registros na demanda)`
+        })
+        await step('Assistido: ausência cadastrada tira a capacidade do período, na tela e no banco', async () => {
+          const off = await must('POST', 'maker_time_off', { user_id: target.id, day: wd(11), period: 'manha', reason: 'AUTO Ausência ' + run }, 'return=representation')
+          state.timeOff.push(off[0].id); save()
+          assert.equal(await must('POST', 'rpc/maker_period_capacity', { person: target.id, d: wd(11), p: 'manha' }), 0)
+          const r = await rest('POST', 'maker_blocks', { work_item_id: id(N.conflito), user_id: target.id, day: wd(11), period: 'manha', minutes: 15 })
+          assert.equal(r.ok, false); assert.match(r.message || '', /excede o tempo disponível/)
+          await openWeek(); await forward(weeksAhead + 1)
+          await slot(target.name, wd(11), 'manhã').getByText('Ausência: AUTO Ausência ' + run).waitFor(T)
+          await page.screenshot({ path: path.join(shots, 'assistido.png'), fullPage: true })
+        })
+        await step('Assistido: banco recusa proposta que entraria na folga sem confirmação, e registra o uso confirmado', async () => {
+          const full = Object.entries(await reservedByPeriod()).find(([, minutes]) => minutes > 0)[0], [d, p] = full.split('|')
+          const lim = await limitOf(full), now = (await reservedByPeriod())[full], item = id(N.cortar)
+          const plan = extra => ({ plan: { item_id: item, assignee_id: target.id, mode: 'estimativa', work_minutes: 240, protection_minutes: 0, blocks: [{ day: d, period: p, minutes: lim - now + 15, purpose: 'trabalho' }], ...extra } })
+          const refused = await rest('POST', 'rpc/maker_accept_plan', plan({})); assert.equal(refused.ok, false); assert.match(refused.message || '', /folga protegida/)
+          assert.equal((await blocksOf(item)).filter(b => b.status === 'planned').length, 1, 'recusa não muda as reservas da etapa')
+          await must('POST', 'rpc/maker_accept_plan', plan({ use_slack: true }))
+          const note = (await must('GET', `maker_estimate_log?select=note&work_item_id=eq.${item}&reason=eq.folga`))[0].note; assert.match(note, /15 min da folga protegida/)
+          return `recusa: "${refused.message}"`
+        })
+      }
+    }
 
     await step('Dashboard com o banco real: números conferem com o banco e os indicadores abrem as listas', async () => {
       const tickets = await must('GET', 'tickets?select=id,status,responsavel_id,data_entrega,entregue_em&excluida_em=is.null&limit=5000')

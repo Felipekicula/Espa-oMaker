@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabaseClient'
-import type { Availability, MakerEvent, Period, PlanningBlock, PlanningData, WorkItem } from '../types/planning'
+import type { Availability, BusySpan, EstimateLog, MakerEvent, Period, PersonSetting, PlanningBlock, PlanningData, TimeOff, WorkItem } from '../types/planning'
 import { listTickets, type TicketTask } from './tickets'
 
 export function planningError(error: unknown): string {
@@ -21,7 +21,53 @@ export async function loadPlanning(): Promise<PlanningData> {
   const [events, items, blocks] = await Promise.all([rows<MakerEvent>('maker_events'), rows<WorkItem>('maker_work_items'), rows<PlanningBlock>('maker_blocks')])
   const { data, error } = await supabase.from('maker_availability').select('*')
   if (error) throw error
-  return { events, items, blocks, availability: (data ?? []) as Availability[] }
+  // Tabelas do planejamento assistido: em um banco sem a migração, o resto continua funcionando.
+  const [timeOff, settings] = await Promise.all([supabase.from('maker_time_off').select('*').order('day'), supabase.from('maker_person_settings').select('*')])
+  const assisted = !timeOff.error && !settings.error
+  const failure = timeOff.error ?? settings.error
+  if (failure && !/schema cache|does not exist|Could not find/i.test(failure.message)) throw failure
+  return { events, items, blocks, availability: (data ?? []) as Availability[], timeOff: (timeOff.data ?? []) as TimeOff[], settings: (settings.data ?? []) as PersonSetting[], busy: events, assisted }
+}
+/** Feriados e ausências viram ocupações de período inteiro, para os mesmos cálculos de capacidade dos eventos. */
+export function busyEvents(events: MakerEvent[], timeOff: TimeOff[], userIds: string[]): BusySpan[] {
+  return [...events, ...timeOff.map(off => ({
+    day: off.day,
+    starts_at: off.period === 'tarde' ? '12:00' : '00:00', ends_at: off.period === 'manha' ? '12:00' : '23:59',
+    participant_ids: off.user_id ? [off.user_id] : userIds, status: 'confirmed' as const,
+  }))]
+}
+export interface PlanPayload {
+  item_id?: string; ticket_id?: string; title?: string; assignee_id: string; scope?: 'demanda' | 'etapa'
+  mode: 'estimativa' | 'faixa' | 'indefinida'; work_minutes?: number | null; protection_minutes?: number
+  low_minutes?: number; high_minutes?: number; review_on?: string | null; replace_from_block?: string; use_slack?: boolean; note?: string
+  blocks: { day: string; period: Period; minutes: number; purpose: string }[]
+}
+/** Grava etapa, blocos e histórico de uma vez; o banco valida cada bloco e desfaz tudo se um for recusado. */
+export async function acceptPlan(plan: PlanPayload): Promise<string> {
+  const { data, error } = await supabase.rpc('maker_accept_plan', { plan })
+  if (error) throw error
+  return data as string
+}
+export async function convertToSteps(card_id: string, steps: { title: string; work_minutes: number; protection_minutes: number; assignee_id: string | null }[]) {
+  const { error } = await supabase.rpc('maker_convert_to_steps', { card_id, steps })
+  if (error) throw error
+}
+export async function listEstimateLog(work_item_id: string): Promise<EstimateLog[]> {
+  const { data, error } = await supabase.from('maker_estimate_log').select('*').eq('work_item_id', work_item_id).order('created_at')
+  if (error) throw error
+  return (data ?? []) as EstimateLog[]
+}
+export async function saveSlackPercent(user_id: string, slack_percent: number) {
+  const { error } = await supabase.from('maker_person_settings').upsert({ user_id, slack_percent })
+  if (error) throw error
+}
+export async function addTimeOff(input: Omit<TimeOff, 'id'>) {
+  const { error } = await supabase.from('maker_time_off').insert(input)
+  if (error) throw error
+}
+export async function removeTimeOff(id: string) {
+  const { error } = await supabase.from('maker_time_off').delete().eq('id', id)
+  if (error) throw error
 }
 export async function allActiveTickets() {
   const result = []

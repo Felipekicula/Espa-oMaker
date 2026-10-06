@@ -28,6 +28,7 @@ Crie um projeto Supabase novo, só para testes, e rode no SQL Editor, **uma vez 
 | 18 | `migration-registrado-por.sql` | Formulário público |
 | 19 | `migration-maker-planning.sql` | Planejamento e eventos |
 | 20 | `migration-ticket-entregue-em.sql` | Data de entrega (Dashboard) |
+| 21 | `migration-maker-assisted-planning.sql` | Planejamento assistido. Depende do 19 |
 
 Não rode os demais scripts da pasta em um banco novo:
 
@@ -36,7 +37,7 @@ Não rode os demais scripts da pasta em um banco novo:
 - `fix-triagem-policy.sql` recria uma política antiga, já substituída.
 - `delete-tasks-felipe.sql`, `excluir-todas-canceladas.sql` e `script-limpar-horas-trabalhadas.sql` alteram dados, não estrutura.
 
-`schema.sql` e os scripts 9, 10, 15 e 19 falham se executados duas vezes.
+`schema.sql` e os scripts 9, 10, 15, 19 e 21 falham se executados duas vezes.
 
 Os scripts antigos não têm `GRANT`: dependem da permissão automática do Supabase para tabelas novas. Confira depois de montar o banco:
 
@@ -105,6 +106,8 @@ O que ele faz:
 - Capturas de tela vão para a pasta temporária do sistema, fora do repositório.
 
 Cenários: evento como ocupação fixa; reserva parcial por arraste; vários cartões no período; destinos recusados com motivo; reserva sem arrastar; recusas do próprio banco (capacidade, evento, outro responsável, passado); conflito com outra sessão; remanejamento com histórico; conclusão de etapa sem concluir a demanda; aula cadastrada pela tela com ocorrências e preparação, sem passar pela triagem; bloco vencido; números do Dashboard comparados com o banco.
+
+Com o script 21 aplicado, também: proposta que não grava antes do aceite; aceite atômico; propostas sucessivas preservando a folga; "não sei ainda" com conflito de outra sessão; alerta de revisão e histórico de estimativas; bloqueio de demanda inteira junto com etapas; transformação em etapas sem duplicar horas; ausência tirando capacidade; uso da folga só com confirmação. Sem o script 21, esses cenários são pulados e informados como não executados.
 
 ### Bloco vencido sem contornar o banco
 

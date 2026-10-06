@@ -4,11 +4,14 @@ import { Plus, ChevronLeft, ChevronRight, Settings, AlertTriangle, Check, GripVe
 import { LayoutShell } from '../components/LayoutShell'
 import { PageHeader } from '../components/PageHeader'
 import { PlanningDialog } from '../components/PlanningDialog'
+import { PlannerDialog, type PlannerTarget } from '../components/PlannerDialog'
+import { CalendarDialog, ConvertDialog, EstimateDetails } from '../components/PlanningExtras'
 import { usePlanningData } from '../hooks/usePlanningData'
-import { completeItem, continueBlock, createWorkItem, planningError, reserveBlock, saveAvailability, saveWorkItem } from '../services/planning'
-import type { Availability, Period, PlanningBlock, WorkItem } from '../types/planning'
+import { completeItem, continueBlock, createWorkItem, planningError, reserveBlock, saveAvailability, saveSlackPercent, saveWorkItem } from '../services/planning'
+import { DEFAULT_SLACK_PERCENT, type Availability, type Period, type PlanningBlock, type WorkItem } from '../types/planning'
 import { TIMEZONE, availableMinutes, dateAdd, formatDay, hours, isMissed, itemAssessment, mondayOf, reservedMinutes, slotsFor, timeMinutes, today } from '../utils/planning'
 import { dropVerdict, unscheduledMinutes, type DropVerdict } from '../utils/planningBoard'
+import { slackLimit } from '../utils/planner'
 
 const periods: Period[] = ['manha', 'tarde']
 const periodLabel = { manha: 'Manhã', tarde: 'Tarde' }
@@ -25,6 +28,9 @@ type Dialog =
   | { type: 'block'; blockId: string }
   | { type: 'step'; itemId: string }
   | { type: 'continue'; blockId: string }
+  | { type: 'planner'; target: PlannerTarget }
+  | { type: 'convert'; itemId: string }
+  | { type: 'calendar' }
 
 const slotKey = (s: Slot) => `${s.userId}|${s.day}|${s.period}`
 const slotText = (s: { day: string; period: Period }) => `${formatDay(s.day)} · ${periodLabel[s.period].toLowerCase()}`
@@ -69,6 +75,8 @@ export function PlanningPage() {
   const itemOf = (id: string) => effectiveItems.find(i => i.id === id)
   const activeBlocks = data.blocks.filter(b => itemOf(b.work_item_id)?.status === 'pending' || b.status === 'done')
   const missed = activeBlocks.filter(b => isMissed(b, data.availability, now) && itemOf(b.work_item_id)?.status === 'pending')
+  const slackOf = (userId: string) => data.settings.find(x => x.user_id === userId)?.slack_percent ?? DEFAULT_SLACK_PERCENT
+  const isInvestigation = (b: PlanningBlock) => b.purpose === 'investigacao'
   const dueFor = (i: WorkItem) => {
     const sourceDate = i.ticket_id ? tickets.find(t => t.id === i.ticket_id)?.data_entrega : data.events.find(e => e.id === i.event_id)?.preparation_deadline || data.events.find(e => e.id === i.event_id)?.day
     // Internal target cannot hide an earlier formal delivery date.
@@ -82,7 +90,10 @@ export function PlanningPage() {
     .filter(i => i.status === 'pending' && inScope(i))
     .map(item => ({ item, balance: unscheduledMinutes(item.remaining_minutes, item.id, activeBlocks) }))
     .filter(entry => entry.balance === null || entry.balance > 0)
-  const missedInScope = missed.filter(b => { const i = itemOf(b.work_item_id); return !!i && inScope(i) })
+  // Um bloco de investigação que terminou pede revisão da estimativa; não é um atraso.
+  const missedInScope = missed.filter(b => { const i = itemOf(b.work_item_id); return !!i && inScope(i) && !isInvestigation(b) })
+  const reviews = effectiveItems.filter(i => i.status === 'pending' && inScope(i) && i.estimate_mode === 'indefinida'
+    && ((!!i.review_on && i.review_on <= hoje) || missed.some(b => b.work_item_id === i.id && isInvestigation(b))))
   const unplannedTasks = tasks.filter(t => activeTicketIds.has(t.ticket_id) && t.status !== 'concluido' && !data.items.some(i => i.ticket_task_id === t.id) && (!person || t.responsavel_id === person))
   const noSteps = tickets.filter(t => !data.items.some(i => i.ticket_id === t.id) && (!person || t.responsavel_id === person || tasks.some(task => task.ticket_id === t.id && task.responsavel_id === person)))
   const days = Array.from({ length: 5 }, (_, n) => dateAdd(week, n))
@@ -92,11 +103,14 @@ export function PlanningPage() {
     const closed = !!configured && configured.starts_at === configured.ends_at
     const total = configured ? timeMinutes(configured.ends_at) - timeMinutes(configured.starts_at) : null
     const ended = slot.day < hoje || (slot.day === hoje && !!configured && clock >= timeMinutes(configured.ends_at))
-    const withoutClock = availableMinutes(slot.userId, slot.day, slot.period, data.availability, data.events)
-    const capacity = availableMinutes(slot.userId, slot.day, slot.period, data.availability, data.events, now)
+    const withoutClock = availableMinutes(slot.userId, slot.day, slot.period, data.availability, data.busy)
+    const capacity = availableMinutes(slot.userId, slot.day, slot.period, data.availability, data.busy, now)
     const reserved = reservedMinutes(activeBlocks, slot.userId, slot.day, slot.period, excludeBlockId)
     const events = data.events.filter(e => e.status === 'confirmed' && e.day === slot.day && e.participant_ids.includes(slot.userId) && (slot.period === 'manha' ? timeMinutes(e.starts_at) < 720 : timeMinutes(e.ends_at) > 720))
-    return { closed, total, ended, withoutClock, capacity, reserved, events }
+    const offs = data.timeOff.filter(o => o.day === slot.day && (!o.user_id || o.user_id === slot.userId) && (!o.period || o.period === slot.period))
+    // A folga protegida é uma parte fixa da capacidade do período, não do que sobrou.
+    const limit = withoutClock === null ? null : slackLimit(withoutClock, slackOf(slot.userId))
+    return { closed, total, ended, withoutClock, capacity, reserved, events, offs, limit }
   }
   function verdictFor(c: Carry, slot: Slot): DropVerdict {
     const moving = c.kind === 'block' ? c.block : null
@@ -106,8 +120,15 @@ export function PlanningPage() {
       samePerson: c.item.assignee_id === slot.userId,
       sameSlot: !!moving && moving.user_id === slot.userId && moving.day === slot.day && moving.period === slot.period,
       ended: info.ended, closed: info.closed, capacity: info.capacity, reserved: info.reserved,
-      events: info.events.map(e => e.title),
+      events: [...info.events.map(e => e.title), ...info.offs.map(o => o.reason)],
     })
+  }
+  /** Reservar dentro da folga protegida exige confirmação explícita, com as horas consumidas. */
+  function confirmSlack(slot: Slot, minutes: number, excludeBlockId?: string): boolean {
+    const info = slotInfo(slot, excludeBlockId)
+    if (info.limit === null) return true
+    const over = Math.max(0, info.reserved + minutes - info.limit) - Math.max(0, info.reserved - info.limit)
+    return over <= 0 || window.confirm(`Esta reserva usa ${hours(over)} da folga protegida de ${nameOf(slot.userId)} em ${slotText(slot)}. Confirmar o uso da folga?`)
   }
 
   function open(next: Dialog | null) { setDialog(next); setFormError(''); setChosenSlot(''); setNow(new Date()) }
@@ -145,6 +166,7 @@ export function PlanningPage() {
       return
     }
     // Nothing pending: move right away, keeping duration and history.
+    if (!confirmSlack(slot, c.block.minutes, c.block.id)) return
     void moveBlock(c.item, c.block, slot, total, c.block.minutes)
   }
   function moveBlock(item: WorkItem, block: PlanningBlock, slot: Slot, total: number, minutes: number) {
@@ -161,6 +183,7 @@ export function PlanningPage() {
     if (!Number.isFinite(minutes) || minutes <= 0) { setFormError('Informe a duração do bloco.'); return }
     if (minutes > balance) { setFormError(`Faltam agendar só ${hours(balance)} desta etapa.`); return }
     if (free !== null && minutes > free) { setFormError(`Este período tem ${hours(free)} livres.`); return }
+    if (!confirmSlack(slot, minutes)) return
     void commit(
       () => reserveBlock(item.id, item.assignee_id!, slot.day, slot.period, minutes),
       { key: slotKey(slot), label: item.title },
@@ -174,6 +197,7 @@ export function PlanningPage() {
     if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(minutes) || minutes <= 0) { setFormError('Confira as horas informadas.'); return }
     if (minutes > total) { setFormError('O novo bloco não pode ser maior que o trabalho restante.'); return }
     if (free !== null && minutes > free) { setFormError(`Este período tem ${hours(free)} livres.`); return }
+    if (!confirmSlack(slot, minutes, block.id)) return
     void moveBlock(item, block, slot, total, minutes)
   }
   function finish(item: WorkItem, block: PlanningBlock | null) {
@@ -226,15 +250,22 @@ export function PlanningPage() {
     return item && item.status === 'pending' && ['planned', 'needs_reschedule'].includes(b.status) ? { kind: 'block', item, block: b, missed: isMissed(b, data.availability, now) } : null
   }
 
+  const hasCommitments = (i: WorkItem) => !!i.ticket_task_id || activeBlocks.some(b => b.work_item_id === i.id && ['planned', 'needs_reschedule'].includes(b.status))
+  const planItem = (item: WorkItem, fromBlock?: PlanningBlock) => open({ type: 'planner', target: { title: item.title, item, fromBlock, deadline: dueFor(item), assigneeId: item.assignee_id, lockAssignee: hasCommitments(item) } })
+  const planTicket = (t: { id: string; titulo: string; data_entrega?: string | null; responsavel_id: string | null }) =>
+    open({ type: 'planner', target: { title: t.titulo, ticketId: t.id, deadline: t.data_entrega ?? null, assigneeId: t.responsavel_id, lockAssignee: false } })
+
   function blockCard(block: PlanningBlock) {
     const item = itemOf(block.work_item_id), late = isMissed(block, data.availability, now) && item?.status === 'pending'
-    const due = item ? dueFor(item) : null
+    const due = item ? dueFor(item) : null, review = late && isInvestigation(block)
     return (
-      <button type="button" key={block.id} className={`board-card ${late ? 'missed' : ''} ${block.status === 'done' ? 'done' : ''} ${saving?.blockId === block.id ? 'leaving' : ''}`}
+      <button type="button" key={block.id} className={`board-card ${review ? 'review' : late ? 'missed' : ''} ${block.status === 'done' ? 'done' : ''} ${saving?.blockId === block.id ? 'leaving' : ''}`}
         onClick={() => open({ type: 'block', blockId: block.id })} {...dragProps(busy ? null : carryOfBlock(block))}>
         <b>{item?.title || 'Etapa'}</b>
         <span>{hours(block.minutes)}</span>
-        {late && <em><AlertTriangle size={12} /> Precisa remanejar</em>}
+        {late && !review && <em><AlertTriangle size={12} /> Precisa remanejar</em>}
+        {review && <em className="warn">Revisar estimativa</em>}
+        {!late && block.status !== 'done' && block.purpose && block.purpose !== 'trabalho' && <small className="tag">{block.purpose === 'protecao' ? 'proteção' : 'investigação'}</small>}
         {block.status === 'done' && <em className="ok"><Check size={12} /> Etapa concluída</em>}
         {!late && block.status === 'planned' && due && block.day > due && <em>Depois do prazo</em>}
       </button>
@@ -242,14 +273,15 @@ export function PlanningPage() {
   }
 
   const detailBlock = dialog?.type === 'block' || dialog?.type === 'continue' ? data.blocks.find(b => b.id === dialog.blockId) : undefined
-  const detailItem = dialog?.type === 'step' ? itemOf(dialog.itemId) : detailBlock ? itemOf(detailBlock.work_item_id) : undefined
+  const detailItem = dialog?.type === 'step' || dialog?.type === 'convert' ? itemOf(dialog.itemId) : detailBlock ? itemOf(detailBlock.work_item_id) : undefined
   const history: PlanningBlock[] = []
   for (let cursor = detailBlock; cursor?.predecessor_id;) { const previous = data.blocks.find(b => b.id === cursor!.predecessor_id); if (!previous) break; history.push(previous); cursor = previous }
-  const suggestions = dialog?.type === 'continue' && detailItem?.assignee_id ? slotsFor(detailItem.assignee_id, Math.round(blockHours * 60), dueFor(detailItem), data.availability, data.events, activeBlocks, now, detailBlock?.id) : []
+  const suggestions = dialog?.type === 'continue' && detailItem?.assignee_id ? slotsFor(detailItem.assignee_id, Math.round(blockHours * 60), dueFor(detailItem), data.availability, data.busy, activeBlocks, now, detailBlock?.id) : []
 
   return <LayoutShell><section className="space-y-5">
     <PageHeader titulo="Planejamento de equipe" subtitulo="Arraste as etapas para a semana. Clique em um cartão para ver detalhes, concluir ou continuar depois."
       acoes={<>
+        {data.assisted && <button className="btn btn-outline" disabled={loading || !!error} onClick={() => open({ type: 'calendar' })}><CalendarClock size={15} /> Feriados e ausências</button>}
         <button className="btn btn-outline" disabled={loading || !!error} onClick={() => { open({ type: 'availability' }); setAvailableUser(person || users[0]?.id || ''); setConfirmedClosed({}) }}><Settings size={15} /> Horários da equipe</button>
         <button className="btn btn-lime" disabled={loading || !!error} onClick={() => { open({ type: 'item' }); setSource('ticket'); setSourceId(''); setTaskId('') }}><Plus size={15} /> Adicionar etapa</button>
       </>} />
@@ -275,6 +307,12 @@ export function PlanningPage() {
             </button>
           })}
         </section>}
+        {!!reviews.length && <section>
+          <h2 className="board-side-title warn"><CalendarClock size={15} /> Revisar estimativa · {reviews.length}</h2>
+          {reviews.map(item => <button type="button" key={item.id} className="board-item review" onClick={() => open({ type: 'step', itemId: item.id })}>
+            <span><b>{item.title}</b><small>{projectOf(item)} · {nameOf(item.assignee_id)}</small><small className="strong">Definir quanto falta{item.review_on ? ` · revisão em ${formatDay(item.review_on)}` : ''}</small></span>
+          </button>)}
+        </section>}
         <section>
           <h2 className="board-side-title">A agendar · {backlog.length}</h2>
           {eventFilter && <p className="planning-meta mb-2">Só o evento selecionado. <button type="button" className="underline" onClick={() => setParams({})}>Ver tudo</button></p>}
@@ -297,7 +335,8 @@ export function PlanningPage() {
           </div>)}
           {noSteps.map(t => <div key={t.id} className="board-more-row">
             <span><Link to={`/demandas/${t.id}`} className="font-semibold">{t.titulo}</Link><small>{t.status === 'pronta' ? 'Confirmar entrega' : t.data_entrega && t.data_entrega < hoje ? 'Prazo ultrapassado' : 'Sem etapas'} · {t.data_entrega ? formatDay(t.data_entrega) : 'sem prazo'}</small></span>
-            <button className="btn btn-outline btn-sm" onClick={() => { open({ type: 'item' }); setSource('ticket'); setSourceId(t.id); setTaskId('') }}>Planejar etapa</button>
+            <div className="flex flex-wrap gap-2">{data.assisted && <button className="btn btn-lime btn-sm" onClick={() => planTicket(t)}>Planejar demanda inteira</button>}
+              <button className="btn btn-outline btn-sm" onClick={() => { open({ type: 'item' }); setSource('ticket'); setSourceId(t.id); setTaskId('') }}>Planejar etapa</button></div>
           </div>)}
         </details>}
       </aside>
@@ -335,8 +374,10 @@ export function PlanningPage() {
                 <div className={`board-meter ${info.total === null ? 'unknown' : ''}`} role="img" aria-label={`Ocupação: ${label}`}>
                   {eventShare > 0 && <i className="evt" style={{ width: `${eventShare}%` }} />}
                   {reservedShare > 0 && <i className={over ? 'over' : ''} style={{ width: `${reservedShare}%` }} />}
+                  {!!info.total && info.limit !== null && info.withoutClock !== null && info.limit < info.withoutClock && <b style={{ left: `${eventShare + info.limit / info.total * 100}%` }} title="Daqui em diante é a folga protegida" />}
                 </div>
                 {info.events.map(e => <Link to="/eventos" key={e.id} className="board-fixed" title="Ocupação fixa: abre Aulas e eventos"><b>{kindLabel[e.kind]}: {e.title}</b><span>{e.starts_at.slice(0, 5)}–{e.ends_at.slice(0, 5)}</span></Link>)}
+                {info.offs.map(o => <div key={o.id} className="board-fixed"><b>{o.user_id ? 'Ausência' : 'Feriado'}: {o.reason}</b></div>)}
                 {blocks.map(blockCard)}
                 {saving?.key === key && <div className="board-card ghost"><b>{saving.label}</b><span>Gravando…</span></div>}
                 {verdict && !verdict.ok && <p className="board-reason">{verdict.reason}</p>}
@@ -372,20 +413,24 @@ export function PlanningPage() {
     {dialog?.type === 'block' && detailBlock && detailItem && (() => {
       const c = carryOfBlock(detailBlock), due = dueFor(detailItem), late = !!c && c.kind === 'block' && c.missed
       return <PlanningDialog title={detailItem.title} onClose={() => setDialog(null)}>
-        {late && <p className="planning-error mb-3"><b>Precisa remanejar.</b> O período terminou e a etapa continua pendente.</p>}
+        {late && !isInvestigation(detailBlock) && <p className="planning-error mb-3"><b>Precisa remanejar.</b> O período terminou e a etapa continua pendente.</p>}
+        {late && isInvestigation(detailBlock) && <p className="planning-warning mb-3"><b>Revisar estimativa.</b> O período da investigação terminou. Isso não comprova que ela foi feita: defina a estimativa ou, se não trabalhou neste bloco, remaneje.</p>}
         <dl className="board-facts">
-          <div><dt>Bloco</dt><dd>{hours(detailBlock.minutes)} · {slotText(detailBlock)}</dd></div>
+          <div><dt>Bloco</dt><dd>{hours(detailBlock.minutes)} · {slotText(detailBlock)}{detailBlock.purpose === 'protecao' ? ' · proteção' : detailBlock.purpose === 'investigacao' ? ' · investigação' : ''}</dd></div>
           <div><dt>Responsável</dt><dd>{nameOf(detailBlock.user_id)}</dd></div>
           <div><dt>Projeto</dt><dd>{detailItem.ticket_id ? <Link to={`/demandas/${detailItem.ticket_id}`} className="underline">{projectOf(detailItem)}</Link> : projectOf(detailItem)}</dd></div>
           <div><dt>Prazo</dt><dd>{due ? formatDay(due) : 'a definir'}</dd></div>
           <div><dt>Trabalho restante da etapa</dt><dd>{detailItem.remaining_minutes === null ? '—' : hours(detailItem.remaining_minutes)}</dd></div>
-          <div><dt>Situação</dt><dd>{itemAssessment(detailItem, due, activeBlocks, data.availability, data.events, now)}</dd></div>
+          <div><dt>Situação</dt><dd>{itemAssessment(detailItem, due, activeBlocks, data.availability, data.busy, now)}</dd></div>
           {!!history.length && <div><dt>Histórico</dt><dd>{history.map(b => `remanejado de ${slotText(b)} (${hours(b.minutes)})`).join(' · ')}</dd></div>}
         </dl>
+        <EstimateDetails item={detailItem} users={users} />
         {c ? <div className="flex flex-wrap gap-2 mt-5">
           <button className="btn btn-lime" disabled={busy} onClick={() => finish(detailItem, detailBlock)}><Check size={14} /> Concluir etapa</button>
           <button className="btn btn-outline" disabled={busy} onClick={() => { const total = detailItem.remaining_minutes ?? detailBlock.minutes; setRemaining(total / 60); setBlockHours(Math.min(total, detailBlock.minutes) / 60); open({ type: 'continue', blockId: detailBlock.id }) }}>Continuar depois</button>
-          <button className="btn btn-outline" disabled={busy} onClick={() => startPlacing(c)}>Mover para outro período</button>
+          <button className="btn btn-outline" disabled={busy} onClick={() => startPlacing(c)}>{late && isInvestigation(detailBlock) ? 'Não trabalhei nesse bloco · remanejar' : 'Mover para outro período'}</button>
+          {data.assisted && <button className="btn btn-outline" disabled={busy} onClick={() => planItem(detailItem, detailBlock)}>{isInvestigation(detailBlock) ? 'Definir estimativa' : 'Revisar quanto falta e recalcular'}</button>}
+          {detailItem.scope === 'demanda' && <button className="btn btn-outline" disabled={busy} onClick={() => open({ type: 'convert', itemId: detailItem.id })}>Transformar em etapas</button>}
         </div> : <p className="planning-meta mt-4">{detailBlock.status === 'done' ? '✓ Etapa concluída.' : 'Este bloco não está mais ativo.'}</p>}
         <p className="planning-meta mt-3">Concluir uma etapa não conclui a demanda inteira.</p>
       </PlanningDialog>
@@ -400,18 +445,21 @@ export function PlanningPage() {
           <div><dt>Projeto</dt><dd>{detailItem.ticket_id ? <Link to={`/demandas/${detailItem.ticket_id}`} className="underline">{projectOf(detailItem)}</Link> : projectOf(detailItem)}</dd></div>
           <div><dt>Prazo</dt><dd>{due ? formatDay(due) : 'a definir'}</dd></div>
           <div><dt>Falta agendar</dt><dd>{balance === null ? 'definir estimativa' : hours(balance)}</dd></div>
-          <div><dt>Situação</dt><dd>{itemAssessment(detailItem, due, activeBlocks, data.availability, data.events, now)}</dd></div>
+          <div><dt>Situação</dt><dd>{itemAssessment(detailItem, due, activeBlocks, data.availability, data.busy, now)}</dd></div>
           {!!reservations.length && <div><dt>Reservas</dt><dd>{reservations.map(b => `${hours(b.minutes)} em ${slotText(b)}`).join(' · ')}</dd></div>}
         </dl>
-        <form key={detailItem.id + '-' + detailItem.assignee_id + '-' + detailItem.remaining_minutes} onSubmit={e => void submitEstimate(e, detailItem)} className="bg-slate-50 p-3 rounded-lg my-4">
+        <EstimateDetails item={detailItem} users={users} />
+        {!detailItem.estimate_mode && <form key={detailItem.id + '-' + detailItem.assignee_id + '-' + detailItem.remaining_minutes} onSubmit={e => void submitEstimate(e, detailItem)} className="bg-slate-50 p-3 rounded-lg my-4">
           <div className="grid grid-cols-2 gap-3">
             <label className="ctp-label">Responsável<select name="assignee" required className="ctp-input" defaultValue={detailItem.assignee_id || ''}><option value="">Selecione</option>{users.map(u => <option value={u.id} key={u.id}>{u.name}</option>)}</select></label>
             <label className="ctp-label">Total restante · horas<input name="estimate" type="number" required min={0.25} step={0.25} className="ctp-input" defaultValue={detailItem.remaining_minutes === null ? '' : detailItem.remaining_minutes / 60} /></label>
           </div>
           <button type="submit" className="btn btn-outline mt-3" disabled={busy}>Salvar estimativa</button>
-        </form>
+        </form>}
         <div className="flex flex-wrap gap-2">
           <button className="btn btn-lime" disabled={busy || !balance || !detailItem.assignee_id} onClick={() => startPlacing({ kind: 'item', item: detailItem, balance: balance! })}>Reservar em um período</button>
+          {data.assisted && <button className="btn btn-outline" disabled={busy} onClick={() => planItem(detailItem)}>{detailItem.estimate_mode === 'indefinida' ? 'Definir estimativa' : 'Sugerir blocos'}</button>}
+          {detailItem.scope === 'demanda' && <button className="btn btn-outline" disabled={busy} onClick={() => open({ type: 'convert', itemId: detailItem.id })}>Transformar em etapas</button>}
           <button className="btn btn-outline" disabled={busy} onClick={() => finish(detailItem, null)}><Check size={14} /> Concluir etapa</button>
         </div>
         <p className="planning-meta mt-3">Concluir uma etapa não conclui a demanda inteira. A meta interna não altera o prazo oficial.</p>
@@ -429,6 +477,7 @@ export function PlanningPage() {
         const [day, period] = chosenSlot.split('|') as [string, Period], option = suggestions.find(s => s.day === day && s.period === period)
         if (option?.free !== null && option?.free !== undefined && blockHours * 60 > option.free) { setFormError('O bloco não cabe neste período. Divida o trabalho ou escolha outro período.'); return }
         if (option?.afterDeadline && !window.confirm('Este bloco ficará depois do prazo. Manter esta reserva sem alterar o prazo oficial?')) return
+        if (!confirmSlack({ userId: detailBlock.user_id, day, period }, Math.round(blockHours * 60), detailBlock.id)) return
         void moveBlock(detailItem, detailBlock, { userId: detailBlock.user_id, day, period }, Math.round(remaining * 60), Math.round(blockHours * 60))
       }}>
         <label className="ctp-label">Total de trabalho ainda restante · horas<input type="number" min={0.25} step={0.25} required className="ctp-input" value={remaining} onChange={e => setRemaining(Number(e.target.value))} /></label>
@@ -440,6 +489,12 @@ export function PlanningPage() {
       </form>
     </PlanningDialog>}
 
+    {dialog?.type === 'planner' && <PlannerDialog target={dialog.target} data={data} users={users} activeBlocks={activeBlocks} now={now}
+      onAccepted={message => { setDialog(null); setNotice({ tone: 'ok', text: message }); void refresh() }} onRefused={refresh} onClose={() => setDialog(null)} />}
+    {dialog?.type === 'convert' && detailItem && <ConvertDialog card={detailItem} users={users}
+      onDone={message => { setDialog(null); setNotice({ tone: 'ok', text: message }); void refresh() }} onClose={() => setDialog(null)} />}
+    {dialog?.type === 'calendar' && <CalendarDialog data={data} users={users} now={now} onChanged={refresh} onClose={() => setDialog(null)} />}
+
     {dialog?.type === 'item' && <PlanningDialog title="Adicionar etapa ao planejamento" onClose={() => { if (!busy) setDialog(null) }}><form onSubmit={submitItem} className="space-y-4">
       {formError && <p role="alert" className="planning-error">{formError}</p>}
       <label className="ctp-label">Origem<select className="ctp-input" value={source} onChange={e => { setSource(e.target.value as typeof source); setSourceId(''); setTaskId('') }}><option value="ticket">Demanda</option><option value="event">Preparação de evento</option></select></label>
@@ -449,7 +504,13 @@ export function PlanningPage() {
       <label className="ctp-label">Responsável<select name="assignee" className="ctp-input" disabled={!!taskId}><option value="">Definir depois</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label><label className="ctp-label">Trabalho restante · horas estimadas<input type="number" min={0.25} step={0.25} name="estimate" className="ctp-input" placeholder="Pode definir depois" /></label><label className="ctp-label">Meta interna opcional<input type="date" name="due" className="ctp-input" /></label><p className="planning-meta">A meta interna não altera nem substitui o prazo oficial. Uma tarefa existente mantém seu responsável.</p><button className="btn btn-lime" type="submit" disabled={busy}>Adicionar etapa</button>
     </form></PlanningDialog>}
 
-    {dialog?.type === 'availability' && <PlanningDialog title="Horários disponíveis para trabalhar" onClose={() => { if (!busy) setDialog(null) }}><p className="planning-warning mb-4">Confirme horários reais, descontando almoço. Cadastre aulas e reuniões em Aulas e eventos. Em branco = desconhecido; indisponível = zero horas.</p>{formError && <p role="alert" className="planning-error">{formError}</p>}<label className="ctp-label">Pessoa<select className="ctp-input mb-4" value={availableUser} onChange={e => { setAvailableUser(e.target.value); setConfirmedClosed({}) }}>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label><form key={availableUser} onSubmit={submitAvailability} className="space-y-3">{[1, 2, 3, 4, 5].map(day => <fieldset key={day} className="border-b border-slate-200 pb-3"><legend className="font-semibold text-sm">{['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta'][day - 1]}</legend>{periods.map(period => {
+    {dialog?.type === 'availability' && <PlanningDialog title="Horários disponíveis para trabalhar" onClose={() => { if (!busy) setDialog(null) }}><p className="planning-warning mb-4">Confirme horários reais, descontando almoço. Cadastre aulas e reuniões em Aulas e eventos. Em branco = desconhecido; indisponível = zero horas.</p>{formError && <p role="alert" className="planning-error">{formError}</p>}<label className="ctp-label">Pessoa<select className="ctp-input mb-4" value={availableUser} onChange={e => { setAvailableUser(e.target.value); setConfirmedClosed({}) }}>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
+      {data.assisted && availableUser && <form key={'slack-' + availableUser + slackOf(availableUser)} className="flex flex-wrap items-end gap-2 mb-4" onSubmit={e => { e.preventDefault(); const value = Number(new FormData(e.currentTarget).get('slack')); void mutate(() => saveSlackPercent(availableUser, value), false) }}>
+        <label className="ctp-label">Folga protegida · % de cada período<input name="slack" type="number" min={0} max={50} step={5} required defaultValue={slackOf(availableUser)} className="ctp-input" style={{ width: 120 }} /></label>
+        <button type="submit" className="btn btn-outline" disabled={busy}>Salvar folga</button>
+        <span className="planning-meta">As propostas automáticas não usam essa parte do período; usá-la à mão pede confirmação.</span>
+      </form>}
+      <form key={availableUser} onSubmit={submitAvailability} className="space-y-3">{[1, 2, 3, 4, 5].map(day => <fieldset key={day} className="border-b border-slate-200 pb-3"><legend className="font-semibold text-sm">{['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta'][day - 1]}</legend>{periods.map(period => {
       const key = `${day}-${period}`, existing = data.availability.find(a => a.user_id === availableUser && a.weekday === day && a.period === period), closed = confirmedClosed[key] ?? (existing?.starts_at === existing?.ends_at && !!existing)
       return <div key={period} className="flex gap-2 items-center flex-wrap mt-2"><span className="text-xs w-12">{periodLabel[period]}</span><input type="time" aria-label={`${day} ${period} início`} name={key + '-start'} defaultValue={existing?.starts_at.slice(0, 5)} disabled={closed} className="ctp-input" style={{ width: 110 }} /><input type="time" aria-label={`${day} ${period} término`} name={key + '-end'} defaultValue={existing?.ends_at.slice(0, 5)} disabled={closed} className="ctp-input" style={{ width: 110 }} /><label className="text-xs"><input type="checkbox" checked={closed} onChange={e => setConfirmedClosed(s => ({ ...s, [key]: e.target.checked }))} /> Indisponível</label></div>
     })}</fieldset>)}<button type="submit" className="btn btn-lime" disabled={busy || !availableUser}>Salvar horários</button></form></PlanningDialog>}

@@ -1,4 +1,4 @@
-import type { Availability, MakerEvent, Period, PlanningBlock, WorkItem } from '../types/planning'
+import type { Availability, BusySpan, Period, PlanningBlock, WorkItem } from '../types/planning'
 export const TIMEZONE = 'America/Sao_Paulo'
 export function today(now = new Date()): string {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now)
@@ -24,7 +24,7 @@ export function isMissed(block: PlanningBlock, availability: Availability[], now
   return timeMinutes(clock) >= timeMinutes(slot.ends_at)
 }
 // Merge intervals so concurrent events do not subtract the same minutes twice.
-export function availableMinutes(userId: string, day: string, period: Period, availability: Availability[], events: MakerEvent[], now?: Date): number | null {
+export function availableMinutes(userId: string, day: string, period: Period, availability: Availability[], events: BusySpan[], now?: Date): number | null {
   const slot = availability.find(a => a.user_id === userId && a.weekday === weekday(day) && a.period === period)
   if (!slot) return null
   let start = timeMinutes(slot.starts_at); const end = timeMinutes(slot.ends_at)
@@ -46,7 +46,7 @@ export function availableMinutes(userId: string, day: string, period: Period, av
 export function reservedMinutes(blocks: PlanningBlock[], userId: string, day: string, period: Period, excludeId?: string): number {
   return blocks.filter(b => b.id !== excludeId && b.user_id === userId && b.day === day && b.period === period && b.status === 'planned').reduce((sum, b) => sum + b.minutes, 0)
 }
-export function slotsFor(userId: string, remaining: number, deadline: string | null, availability: Availability[], events: MakerEvent[], blocks: PlanningBlock[], now = new Date(), excludeId?: string) {
+export function slotsFor(userId: string, remaining: number, deadline: string | null, availability: Availability[], events: BusySpan[], blocks: PlanningBlock[], now = new Date(), excludeId?: string) {
   const untilDeadline = deadline ? Math.ceil((new Date(deadline+'T12:00:00Z').getTime() - new Date(today(now)+'T12:00:00Z').getTime()) / 86400000) : 0
   const horizon = Math.min(366, Math.max(21, untilDeadline + 8))
   return Array.from({ length: horizon }, (_, i) => dateAdd(today(now), i)).filter(d => weekday(d) >= 1 && weekday(d) <= 5)
@@ -56,7 +56,7 @@ export function slotsFor(userId: string, remaining: number, deadline: string | n
       return { day, period, free, fits: free !== null && free >= remaining, afterDeadline: !!deadline && day > deadline }
     })).sort((a, b) => Number(a.afterDeadline) - Number(b.afterDeadline) || Number(b.fits) - Number(a.fits) || a.day.localeCompare(b.day) || a.period.localeCompare(b.period))
 }
-export function itemAssessment(item: WorkItem, deadline: string | null, blocks: PlanningBlock[], availability: Availability[], events: MakerEvent[], now = new Date()) {
+export function itemAssessment(item: WorkItem, deadline: string | null, blocks: PlanningBlock[], availability: Availability[], events: BusySpan[], now = new Date()) {
   if (item.status === 'completed') return 'Etapa concluída'
   if (blocks.some(b => b.work_item_id === item.id && isMissed(b, availability, now))) return 'Precisa remanejar'
   if (!deadline) return 'Definir prazo'

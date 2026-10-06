@@ -36,6 +36,7 @@ const periods: Period[] = ['manha', 'tarde']
 export function planningSnapshot(
   data: PlanningData, tickets: SnapshotTicket[], tasks: SnapshotTask[], userIds: string[], now = new Date(), workdays = 10,
 ): PlanningSnapshot {
+  const busy = data.busy.length ? data.busy : data.events
   const activeEvents = new Set(data.events.filter(e => e.status !== 'cancelled').map(e => e.id))
   const activeTickets = new Map(tickets.map(t => [t.id, t]))
   const items = data.items
@@ -57,7 +58,7 @@ export function planningSnapshot(
   for (const item of items) {
     const deadline = deadlineOf(item)
     if (item.status !== 'pending' || !deadline) continue
-    const assessment = itemAssessment(item, deadline, activeBlocks, data.availability, data.events, now)
+    const assessment = itemAssessment(item, deadline, activeBlocks, data.availability, busy, now)
     if (assessment.startsWith('Faltam reservar') || assessment.startsWith('Não cabe')) short.push({ item, deadline, assessment })
   }
   short.sort((a, b) => a.deadline.localeCompare(b.deadline))
@@ -69,7 +70,7 @@ export function planningSnapshot(
   const capacity = userIds.map(userId => {
     const person: PersonCapacity = { userId, available: 0, reserved: 0, excess: 0, free: 0, unknownPeriods: 0, reservedUnknown: 0 }
     for (const day of days) for (const period of periods) {
-      const known = availableMinutes(userId, day, period, data.availability, data.events, now)
+      const known = availableMinutes(userId, day, period, data.availability, busy, now)
       const reserved = reservedMinutes(activeBlocks, userId, day, period)
       if (known === null) { person.unknownPeriods++; person.reservedUnknown += reserved; continue }
       person.available += known

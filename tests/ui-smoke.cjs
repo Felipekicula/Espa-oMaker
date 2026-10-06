@@ -8,9 +8,9 @@ const shot = name => path.join(os.tmpdir(), name)
   const vite = await createServer({ root: path.resolve(__dirname, '..'), server: { host: '127.0.0.1', port: PORT, strictPort: true } }); await vite.listen()
   const base = `http://127.0.0.1:${PORT}`
   const browser = await pw.launch({ headless: true }); const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
-  const errors = []; page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => d.accept())
+  const errors = [], confirms = []; page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { confirms.push(d.message()); d.accept() })
 
-  const user = '00000000-0000-0000-0000-000000000001', other = '00000000-0000-0000-0000-000000000002', ticket = '00000000-0000-0000-0000-000000000003'
+  const user = '00000000-0000-0000-0000-000000000001', other = '00000000-0000-0000-0000-000000000002', ticket = '00000000-0000-0000-0000-000000000003', ticket2 = '00000000-0000-0000-0000-000000000004'
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date())
   const plus = (n, from = today) => { const d = new Date(from + 'T12:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10) }
   const br = day => day.split('-').reverse().join('/')
@@ -32,7 +32,8 @@ const shot = name => path.join(os.tmpdir(), name)
     { id: 'b3', work_item_id: 'i3', user_id: other, day: week(1), period: 'manha', minutes: 120, status: 'planned', predecessor_id: null },
   ]
   const availability = users.flatMap(u => [1, 2, 3, 4, 5].flatMap(weekday => ['manha', 'tarde'].map(period => ({ user_id: u.id, weekday, period, starts_at: period === 'manha' ? '08:00:00' : '13:00:00', ends_at: period === 'manha' ? '12:00:00' : '17:00:00' }))))
-  const tickets = [{ id: ticket, titulo: 'Rover de teste', tipo: 'interna', origem: 'interno', categoria: 'engenharia', prioridade: 'media', status: 'em_producao', responsavel_id: user, data_criacao: today, data_entrega: week(11), responsavel: { id: user, name: 'Felipe' } }]
+  const tickets = [{ id: ticket, titulo: 'Rover de teste', tipo: 'interna', origem: 'interno', categoria: 'engenharia', prioridade: 'media', status: 'em_producao', responsavel_id: user, data_criacao: today, data_entrega: week(11), responsavel: { id: user, name: 'Felipe' } },
+    { id: ticket2, titulo: 'Braço robótico', tipo: 'interna', origem: 'interno', categoria: 'engenharia', prioridade: 'media', status: 'aprovado', responsavel_id: other, data_criacao: today, data_entrega: week(18), responsavel: { id: other, name: 'Manu' } }]
   const calls = []; let failNext = null, serial = 10
   await page.route('https://test.supabase.co/**', async route => {
     const req = route.request(), url = new URL(req.url()), table = url.pathname.split('/').at(-1), body = req.postDataJSON(); let result = [], status = 200
@@ -49,6 +50,11 @@ const shot = name => path.join(os.tmpdir(), name)
       } else if (table === 'maker_complete_item') {
         items.find(i => i.id === body.item_id).status = 'completed'
         blocks.filter(b => b.work_item_id === body.item_id && ['planned', 'needs_reschedule'].includes(b.status)).forEach(b => { b.status = b.id === body.block_id ? 'done' : 'cancelled' })
+      } else if (table === 'maker_accept_plan') {
+        const plan = body.plan, id = 'i' + serial++
+        items.push({ id, title: plan.title, ticket_id: plan.ticket_id, event_id: null, ticket_task_id: null, assignee_id: plan.assignee_id, remaining_minutes: (plan.work_minutes ?? 0) + (plan.protection_minutes ?? 0) || plan.blocks.reduce((n, b) => n + b.minutes, 0), due_date: null, status: 'pending', scope: plan.scope, estimate_mode: plan.mode, work_minutes: plan.work_minutes, protection_minutes: plan.protection_minutes ?? 0, review_on: plan.review_on ?? null })
+        for (const b of plan.blocks) blocks.push({ id: 'b' + serial++, work_item_id: id, user_id: plan.assignee_id, day: b.day, period: b.period, minutes: b.minutes, status: 'planned', predecessor_id: null, purpose: b.purpose })
+        result = id
       } else if (table === 'maker_create_event') { events.push({ ...body.payload, id: 'e2', status: 'confirmed', series_id: null }); result = 'e2' }
     }
     else if (table === 'maker_blocks' && req.method() === 'POST') { calls.push({ table, body }); blocks.push({ ...body, id: 'b' + serial++, status: 'planned', predecessor_id: null }); status = 201 }
@@ -138,6 +144,36 @@ const shot = name => path.join(os.tmpdir(), name)
   await notice.filter({ hasText: 'Etapa concluída: Modelar suporte' }).waitFor()
   await slot('Felipe', week(3), 'manhã').getByText('Etapa concluída').waitFor(); assert.equal(tickets[0].status, 'em_producao')
 
+  assert(confirms.some(m => /usa 1h da folga protegida de Felipe/.test(m)), 'reservar dentro da folga pede confirmação com as horas')
+
+  // 7. Planejamento assistido: nada é gravado antes de aceitar; recusa do banco não grava nada.
+  await page.getByText(/Fora do planejamento · \d+/).click()
+  await page.getByRole('button', { name: 'Planejar demanda inteira' }).click()
+  await dialog.getByRole('heading', { name: /Planejar demanda inteira: Braço robótico/ }).waitFor()
+  await dialog.getByText('Informe o responsável e os valores acima').waitFor()
+  await dialog.getByLabel('Trabalho previsto · horas').fill('6')
+  const proposal = dialog.getByRole('region', { name: 'Proposta' })
+  assert.deepEqual(await proposal.locator('.planner-table tbody tr td:first-child').allInnerTexts(), ['Só a estimativa', 'Com a margem', 'Com a margem e a folga'])
+  await proposal.getByText('Tempo de máquina, materiais e dependências').waitFor()
+  await proposal.getByText('Nenhum feriado ou ausência cadastrado').waitFor()
+  assert.equal(calls.filter(c => c.table === 'maker_accept_plan').length, 0, 'a proposta não grava nada')
+  await dialog.getByLabel('Não sei ainda').check()
+  await proposal.getByText('Sem previsão de conclusão:').waitFor(); assert.equal(await proposal.locator('.planner-table').count(), 0)
+  await dialog.getByLabel('Tenho uma faixa').check(); await dialog.getByLabel('Cenário menor · horas').fill('4'); await dialog.getByLabel('Cenário maior · horas').fill('7')
+  assert.deepEqual(await proposal.locator('.planner-table tbody tr td:first-child').allInnerTexts(), ['Se for o cenário menor', 'Se for o cenário maior'])
+  await proposal.getByText('A menor não é um compromisso de entrega').waitFor(); await page.screenshot({ path: shot('ctp-planner.png') })
+  failNext = 'O trabalho excede o tempo disponível neste período.'
+  await dialog.getByRole('button', { name: 'Aceitar proposta' }).click()
+  await dialog.getByRole('alert').filter({ hasText: 'Não foi gravado: O trabalho excede o tempo disponível neste período. Nada foi reservado.' }).waitFor()
+  assert.equal(items.some(i => i.ticket_id === ticket2), false)
+  await dialog.getByRole('button', { name: 'Aceitar proposta' }).click()
+  await notice.filter({ hasText: 'Proposta aceita: Braço robótico, 7h reservadas' }).filter({ hasText: 'O prazo oficial não foi alterado' }).waitFor()
+  const accepted = calls.filter(c => c.table === 'maker_accept_plan' && !c.failed).at(-1).body.plan
+  assert.deepEqual([accepted.mode, accepted.scope, accepted.ticket_id, accepted.assignee_id, accepted.work_minutes, accepted.protection_minutes, accepted.low_minutes, accepted.high_minutes], ['faixa', 'demanda', ticket2, other, 240, 180, 240, 420])
+  assert.equal(accepted.blocks.reduce((n, b) => n + b.minutes, 0), 420); assert.equal(accepted.blocks.filter(b => b.purpose === 'protecao').reduce((n, b) => n + b.minutes, 0), 180)
+  assert.ok(!accepted.use_slack, 'a proposta não entra na folga sem confirmação')
+  assert.equal(tickets[1].data_entrega, week(18))
+
   await page.goto(base + '/eventos'); await page.getByRole('button', { name: 'Novo evento', exact: true }).click(); const form = page.getByRole('dialog')
   await form.locator('[name=title]').fill('Workshop novo'); await form.locator('[name=day]').fill(week(3)); await form.locator('[name=start]').fill('14:00'); await form.locator('[name=end]').fill('16:00'); await form.locator('[name=participants]').first().check(); await form.locator('[name=preparation]').fill('Testar atividade\nSeparar materiais')
   await form.getByRole('button', { name: 'Cadastrar evento' }).click(); await form.waitFor({ state: 'hidden' }); assert(calls.some(c => c.table === 'maker_create_event' && c.body.preparations.length === 2))
@@ -159,7 +195,7 @@ const shot = name => path.join(os.tmpdir(), name)
   await page.goto(base + '/'); await page.getByRole('heading', { name: 'Dashboard do Espaço Maker' }).waitFor(); await page.getByText('Capacidade da equipe').waitFor()
   await page.goto(base + '/relatorios'); await page.getByRole('navigation', { name: 'Visões de relatórios' }).waitFor(); assert(await page.getByRole('navigation', { name: 'Visões de relatórios' }).getByRole('link').count() === 3)
   assert.equal(errors.length, 0, errors.join('\n'))
-  console.log('OK: reserva parcial por arraste, vários cartões no período, destinos inválidos (capacidade, evento, outro responsável), bloco vencido, remanejamento direto com histórico, falha de gravação sem mover, decidir depois, concluir etapa sem mudar a demanda, eventos, dashboard e relatórios.')
+  console.log('OK: reserva parcial por arraste, vários cartões no período, destinos inválidos (capacidade, evento, outro responsável), bloco vencido, remanejamento direto com histórico, falha de gravação sem mover, decidir depois, concluir etapa sem mudar a demanda, confirmação para usar a folga, planejamento assistido (três caminhos, recusa sem gravar, aceite), eventos, dashboard e relatórios.')
   console.log('Capturas em', os.tmpdir())
   await browser.close(); await vite.close()
 })().catch(e => { console.error(e); process.exit(1) })

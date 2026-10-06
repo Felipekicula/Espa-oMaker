@@ -23,6 +23,30 @@ Implementação em `feat/planejamento-equipe-eventos`, baseada no commit `dd9e4c
 - Estimativa restante, reservas e execução são separados dos cronômetros existentes.
 - Dados compartilhados no Supabase; nenhum planejamento fica salvo apenas no navegador. Recarrega a cada minuto e ao voltar à janela. Operações de capacidade são conferidas novamente no banco.
 
+## Planejamento assistido
+
+Requer `supabase/migration-maker-assisted-planning.sql`. Sem ela, o resto do Planejamento funciona e estes recursos ficam ocultos.
+
+- **Planejar demanda inteira:** um único cartão ligado à demanda, sem detalhar etapas. O banco garante um cartão por demanda e impede que a demanda inteira e suas etapas fiquem pendentes ao mesmo tempo. Se a demanda já tem etapas, usa-se "Sugerir blocos" em cada etapa.
+- **Três caminhos:** "Tenho uma estimativa" (horas e margem opcional), "Tenho uma faixa" (cenário menor e maior, mostrados como duas previsões, sem garantia estatística) e "Não sei ainda" (um bloco de investigação e uma data de revisão, sem previsão de conclusão).
+- **Trabalho e proteção separados:** margem e a diferença da faixa são reservadas como proteção, identificada nos blocos. Proteção ocupa capacidade, mas não é trabalho previsto nem hora trabalhada. Ao concluir, as reservas futuras restantes são liberadas.
+- **Histórico de estimativas:** cada alteração gera uma linha (original, revisão, transformação em etapas, uso da folga). O histórico só recebe linhas novas.
+- **Folga protegida:** percentual por pessoa (20% enquanto não for alterado, em "Horários da equipe"). É uma parte fixa da capacidade de cada período e vale para a ocupação total: propostas sucessivas não a consomem. Usá-la, numa proposta ou arrastando à mão, exige confirmação explícita com as horas consumidas; o uso confirmado fica no histórico. O limite rígido do banco continua sendo a capacidade total.
+- **Feriados e ausências:** cadastrados em "Feriados e ausências", tiram a capacidade do período na tela e no banco. Sem nada cadastrado, a proposta avisa que só considera horários e eventos conhecidos.
+- **Proposta:** blocos sugeridos, conclusão prevista, comparação com o prazo oficial, efeito separado da margem e da folga, e o que não coube. Períodos sem horário configurado ficam fora da conta e são informados. Nada é gravado antes do aceite; o aceite grava cartão, blocos e histórico em uma transação, validada pelo banco.
+- **Depois de um bloco:** "Revisar quanto falta e recalcular" pede o trabalho restante (o sistema nunca o reduz sozinho pelas horas reservadas) e gera nova proposta; os blocos anteriores ficam no histórico.
+- **Revisar estimativa:** bloco de investigação terminado gera um alerta próprio, separado de "Precisa remanejar". O fim do período não comprova que a investigação foi feita: é possível definir a estimativa ou informar que não trabalhou no bloco e remanejar.
+- **Transformar em etapas:** redistribui trabalho e proteção; as reservas futuras passam, em ordem, para as etapas do mesmo responsável, sem duplicar horas. Reservas de hoje ou vencidas voltam para "A agendar". O cartão fica marcado como transformado.
+- Valores iniciais de 20% para margem e folga são uma escolha da equipe; não há histórico que os valide. A previsão cobre trabalho humano: tempo de máquina, materiais e dependências ficam à parte. O prazo oficial nunca é alterado.
+
+### Exemplo calculado pelo algoritmo
+
+Os números abaixo são verificados em `tests/planner.test.mjs` com o mesmo código da tela. Agenda do exemplo: 8h–12h e 13h–17h, sexta à tarde indisponível, folga de 20% (3h utilizáveis por período), 2h já reservadas na quarta 07/10 de manhã, uma aula na terça 13/10 de manhã. Prazo oficial: sexta 16/10.
+
+- **Não sei ainda, investigação de 2h:** bloco na quarta 07/10 à tarde (de manhã só resta 1h até o limite). Sem previsão de conclusão. Capacidade conhecida até o prazo: 37h, informada como capacidade, não como previsão.
+- **Depois, faixa de 6h a 10h a partir de quinta 08/10:** cenário menor termina quinta 08/10 à tarde (6 dias úteis de sobra); cenário maior termina segunda 12/10 de manhã (4 dias úteis de sobra). Blocos: quinta 3h + 3h, sexta 3h, segunda 1h.
+- **Estimativa de 10h com margem de 20%, a partir de quarta 07/10:** só a estimativa termina quinta 08/10 de manhã; com a margem, quinta à tarde; com a margem e a folga, sexta 09/10 de manhã (5 dias úteis de sobra).
+
 ## Instalação
 
 1. Obter checkout atualizado do repositório e aplicar esta branch/patch. Resolver eventuais mudanças posteriores à base antes de publicar.
