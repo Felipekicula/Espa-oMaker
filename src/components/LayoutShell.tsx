@@ -2,9 +2,9 @@ import { useRef, useState, useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, List, User, Plus, Inbox, UserCheck, Calendar,
-  Package, Building2, Calculator, SlidersHorizontal, BarChart3,
-  DollarSign, MessageCircle, Image, Rss, Bell, LogOut, ChevronLeft,
-  Menu, Camera, X, FileText,
+  Calculator, SlidersHorizontal, BarChart3,
+  Image, Rss, Bell, LogOut, ChevronLeft,
+  Menu, Camera, X,
 } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { uploadAvatar } from '../services/appUsers'
@@ -30,7 +30,8 @@ const ROUTE_TITLES: Record<string, string> = {
   '/atribuir': 'Definir responsável',
   '/demandas-whatsapp': 'Demandas WhatsApp',
   '/prontos': 'Prontos / Galeria',
-  '/agenda': 'Agenda / Calendário',
+  '/planejamento': 'Planejamento de equipe',
+  '/eventos': 'Aulas e eventos',
   '/feed': 'Feed',
   '/estoque': 'Estoque',
   '/prefeitura': 'Prefeitura',
@@ -142,25 +143,23 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
 
   const principal: NavItemDef[] = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
-    { to: '/demandas', icon: List, label: 'Todas as demandas' },
+    { to: '/demandas', icon: List, label: 'Todas as demandas', end: true },
     { to: '/demandas/minhas', icon: User, label: 'Minhas demandas', badge: unread.minhas },
   ]
   const operacoes: NavItemDef[] = [
     { to: '/triagem', icon: Inbox, label: 'Caixa de entrada', badge: unread.triagem, show: isTriagem },
     { to: '/atribuir', icon: UserCheck, label: 'Definir responsável', show: isTriagem },
-    { to: '/demandas-whatsapp', icon: MessageCircle, label: 'Demandas WhatsApp' },
-    { to: '/prontos', icon: Image, label: 'Prontos / Galeria' },
+    { to: '/eventos', icon: Calendar, label: 'Aulas e eventos' },
   ]
   const gestao: NavItemDef[] = [
-    { to: '/agenda', icon: Calendar, label: 'Agenda' },
+    { to: '/planejamento', icon: Calendar, label: 'Planejamento de equipe' },
+    { to: '/prontos', icon: Image, label: 'Prontos / Galeria' },
     { to: '/feed', icon: Rss, label: 'Feed', badge: unread.feed, show: canFeed },
-    { to: '/estoque', icon: Package, label: 'Estoque' },
-    { to: '/prefeitura', icon: Building2, label: 'Prefeitura' },
+  ]
+  const financeiro: NavItemDef[] = [
     { to: '/orcamento', icon: Calculator, label: 'Calculadora de orçamento' },
-    { to: '/configuracoes-calculadora', icon: SlidersHorizontal, label: 'Config. Calculadora' },
+    { to: '/configuracoes-calculadora', icon: SlidersHorizontal, label: 'Config calculadora' },
     { to: '/relatorios', icon: BarChart3, label: 'Relatórios' },
-    { to: '/relatorios/financeiro', icon: DollarSign, label: 'Financeiro' },
-    { to: '/relatorios/mensal', icon: FileText, label: 'Relatório mensal' },
   ]
 
   const closeMobile = () => setMobileOpen(false)
@@ -227,6 +226,10 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
 
         {!collapsed && <p className="section-title" style={{ marginTop: '1rem' }}>Gestão</p>}
         {gestao.filter((it) => it.show !== false).map((it) => (
+          <SidebarNavItem key={it.to} item={it} collapsed={collapsed} onNavigate={closeMobile} />
+        ))}
+        {!collapsed && <p className="section-title" style={{ marginTop: '1rem' }}>Financeiro</p>}
+        {financeiro.map((it) => (
           <SidebarNavItem key={it.to} item={it} collapsed={collapsed} onNavigate={closeMobile} />
         ))}
       </nav>

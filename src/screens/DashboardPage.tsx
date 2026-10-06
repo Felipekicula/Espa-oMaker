@@ -9,7 +9,8 @@ import { TicketStatusPill } from '../components/TicketStatusPill'
 import { PageHeader } from '../components/PageHeader'
 import { UserAvatar } from '../components/UserAvatar'
 import type { Ticket } from '../types/ticket'
-import { listTickets } from '../services/tickets'
+import { allDashboardTickets } from '../services/planning'
+import { today } from '../utils/planning'
 import { getActiveSessionsAll } from '../services/workSessions'
 import { getTicketCardClasses, CATEGORIA_COR } from '../constants/ticketOptions'
 
@@ -27,24 +28,23 @@ interface SummaryDef {
 export function DashboardPage() {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const [activeByTicket, setActiveByTicket] = useState<Map<string, string>>(new Map())
 
   useEffect(() => {
     const load = async () => {
       try {
         const [ticketsRes, activeList] = await Promise.all([
-          listTickets(
-            { includeCancelada: true },
-            { limit: 200, orderBy: 'data_entrega', orderDirection: 'asc' },
-          ),
+          allDashboardTickets(),
           getActiveSessionsAll(),
         ])
         setTickets(ticketsRes.tickets)
+        setLoadError('')
         const map = new Map<string, string>()
         for (const a of activeList) map.set(a.ticketId, a.userName)
         setActiveByTicket(map)
       } catch {
-        setTickets([])
+        setLoadError('Não foi possível carregar os dados do Dashboard. Tente recarregar a página.')
       } finally {
         setLoading(false)
       }
@@ -53,10 +53,7 @@ export function DashboardPage() {
 
     const interval = setInterval(() => {
       Promise.all([
-        listTickets(
-          { includeCancelada: true },
-          { limit: 200, orderBy: 'data_entrega', orderDirection: 'asc' },
-        ),
+        allDashboardTickets(),
         getActiveSessionsAll(),
       ])
         .then(([{ tickets: data }, activeList]) => {
@@ -86,7 +83,7 @@ export function DashboardPage() {
   const emProducao = tickets.filter(
     (t) => t.status === 'em_producao' || t.status === 'pos_processo',
   ).length
-  const hoje = new Date().toISOString().slice(0, 10)
+  const hoje = today()
   const atrasadas = tickets.filter(
     (t) =>
       t.data_entrega &&
@@ -157,10 +154,15 @@ export function DashboardPage() {
           }
         />
 
+        {loadError && <p className="planning-error" role="alert">{loadError}</p>}
+        <div className="dashboard-overview grid gap-6 md:grid-cols-[1fr_auto] items-center">
+          <div><p className="text-xs uppercase tracking-widest opacity-70">Visão geral do Espaço Maker</p><h2 className="text-2xl font-semibold mt-2">Da ideia à entrega, tudo em um lugar.</h2><p className="text-sm opacity-80 mt-2">{filaAtiva.length} demandas na fila ativa · {atrasadas} com prazo ultrapassado · {prontas} prontas para conferir.</p><div className="flex rounded-full overflow-hidden h-3 mt-5 bg-white/10" aria-label="Distribuição das demandas por status">{summary.filter(s => s.label !== 'Atrasadas').map(s => <div key={s.label} title={`${s.label}: ${s.value}`} style={{ width: `${tickets.length ? s.value/tickets.length*100 : 0}%`, background: s.iconColor }} />)}</div></div>
+          <Link to="/planejamento" className="btn btn-lime">Planejar a semana →</Link>
+        </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
           {summary.map((s) => (
             <Link key={s.label} to={s.to} className="block">
-              <div className="stat-card" style={{ padding: '1rem' }}>
+              <div className="stat-card h-full" style={{ padding: '1.2rem', borderTop: `3px solid ${s.iconColor}`, alignItems: 'flex-start', flexDirection: 'column' }}>
                 <div className="stat-icon" style={{ background: s.iconBg, width: 40, height: 40 }}>
                   <s.icon size={18} color={s.iconColor} strokeWidth={2} />
                 </div>

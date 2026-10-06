@@ -208,7 +208,7 @@ export async function listTickets(
       query = query.order('data_criacao', { ascending: false })
     }
 
-    const { data, error } = await query.range(offset, offset + fetchSize - 1)
+    const { data, error } = await query.order('id').range(offset, offset + fetchSize - 1)
     if (error) throw error
 
     const rows = data ?? []

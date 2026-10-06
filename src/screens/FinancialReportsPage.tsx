@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { LayoutShell } from '../components/LayoutShell'
+import { ReportsLayout } from '../components/ReportsLayout'
 import type { Ticket, TicketCategoria, TicketTipo } from '../types/ticket'
 import { listTickets } from '../services/tickets'
 import { CATEGORIAS } from '../constants/ticketOptions'
@@ -198,7 +198,7 @@ export function FinancialReportsPage() {
   }, [base, inicioEfetivo, fimEfetivo])
 
   return (
-    <LayoutShell>
+    <ReportsLayout>
       <section className="space-y-6">
         <header className="page-header flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -402,7 +402,7 @@ export function FinancialReportsPage() {
           </>
         )}
       </section>
-    </LayoutShell>
+    </ReportsLayout>
   )
 }
 

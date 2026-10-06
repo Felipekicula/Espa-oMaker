@@ -645,3 +645,22 @@ select.ctp-input {
   font-family: 'Inter', sans-serif !important;
   font-size: 12px !important;
 }
+
+/* Shared team planning and direct event registration. */
+.planning-dialog { margin: auto; border: 1px solid var(--border-default); border-radius: 16px; padding: 24px; width: 640px; max-width: calc(100vw - 24px); max-height: 90vh; overflow: auto; color: var(--text-primary); background: white; }
+.planning-dialog::backdrop { background: rgba(2,30,58,.5); }
+.planning-week { display: grid; grid-template-columns: 120px repeat(5,minmax(170px,1fr)); min-width: 970px; }
+.planning-cell { border-bottom: 1px solid var(--border-default); border-right: 1px solid var(--border-default); padding: 10px; min-height: 210px; }
+.planning-heading { min-height: auto; background: var(--bg-muted); padding: 12px; text-align: center; }
+.planning-block { background: #edf4fc; border: 1px solid #d1e1f3; border-left: 3px solid #4b87c7; padding: 10px; border-radius: 8px; font-size: 12px; margin: 8px 0; }
+.planning-block.missed { background: #fff0f0; border-color: #efadb3; border-left-color: #d72c43; }
+.planning-block.done { background: #edf8f1; border-color: #b7dfc6; opacity: .8; }
+.planning-event { background: #f2f4f7; padding: 8px; border-radius: 6px; font-size: 11px; margin: 6px 0; }
+.planning-warning { background: #fff5df; border: 1px solid #f2d59b; color: #805811; padding: 12px; border-radius: 9px; font-size: 12px; }
+.planning-error { background: #fff0f0; border: 1px solid #efadb3; color: #a32739; padding: 12px; border-radius: 9px; font-size: 12px; }
+.planning-meta { color: var(--text-muted); font-size: 11px; }
+.event-list-row { display: flex; align-items: flex-start; gap: 16px; padding: 20px; border-bottom: 1px solid var(--border-default); }
+.event-date-tile { min-width: 60px; text-align: center; background: #edf4fc; padding: 8px; border-radius: 10px; color: var(--ctp-navy); }
+.event-date-tile b { display: block; font-size: 24px; }
+.event-chip { display: inline-block; background: #eef3f8; border-radius: 20px; padding: 3px 8px; font-size: 11px; margin: 3px; }
+.dashboard-overview { background: linear-gradient(120deg,var(--ctp-navy),#0c548c); color: white; border-radius: 16px; padding: 24px; }

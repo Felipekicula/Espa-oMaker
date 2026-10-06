@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type ExcelJS from 'exceljs'
 import { FolderKanban, Wallet, PiggyBank, HeartHandshake } from 'lucide-react'
-import { LayoutShell } from '../components/LayoutShell'
+import { ReportsLayout } from '../components/ReportsLayout'
 import { MetricCard } from '../components/MetricCard'
 import type { Ticket, TicketStatus } from '../types/ticket'
 import { listTickets, listTicketsPagosNoPeriodo } from '../services/tickets'
@@ -703,7 +703,7 @@ export function RelatorioMensalPage() {
   }
 
   return (
-    <LayoutShell>
+    <ReportsLayout>
       <section className="space-y-6">
         <header className="page-header flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -1050,6 +1050,6 @@ export function RelatorioMensalPage() {
           )
         )}
       </section>
-    </LayoutShell>
+    </ReportsLayout>
   )
 }
