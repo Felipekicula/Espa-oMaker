@@ -333,7 +333,8 @@ const hhmm = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${
       const cardOf = async ticket => (await must('GET', `maker_work_items?select=*&ticket_id=eq.${ticket.id}&scope=eq.demanda&order=created_at`)).at(-1)
       const reservedByPeriod = async () => { const m = {}; for (const b of await must('GET', `maker_blocks?select=day,period,minutes&user_id=eq.${target.id}&status=eq.planned&day=gte.${wd(7)}&day=lte.${wd(11)}`)) m[b.day + '|' + b.period] = (m[b.day + '|' + b.period] ?? 0) + b.minutes; return m }
       const limitOf = async key => { const [d, p] = key.split('|'); return (await must('POST', 'rpc/maker_slack_limit', { person: target.id, d, p })) }
-      const withinSlack = async () => { const now = await reservedByPeriod(); for (const key of Object.keys(now)) assert.ok(now[key] <= await limitOf(key), `${key}: ${now[key]} min reservados passam do limite sem folga`); return now }
+      const filledOnPurpose = new Set()
+      const withinSlack = async () => { const now = await reservedByPeriod(); for (const key of Object.keys(now)) if (!filledOnPurpose.has(key)) assert.ok(now[key] <= await limitOf(key), `${key}: ${now[key]} min reservados passam do limite sem folga`); return now }
       const openPlanner = async ticket => {
         await openWeek(); await page.getByText(/Fora do planejamento · \d+/).click()
         await page.locator('.board-more-row', { hasText: ticket.titulo }).getByRole('button', { name: 'Planejar demanda inteira' }).click()
@@ -375,6 +376,7 @@ const hhmm = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${
           const d = dayBr.split('/').reverse().join('-'), p = per === 'manhã' ? 'manha' : 'tarde'
           // Outra sessão ocupa o período sugerido inteiro depois de a proposta ter sido calculada.
           const capacity = await must('POST', 'rpc/maker_period_capacity', { person: target.id, d, p }), taken = (await reservedByPeriod())[d + '|' + p] ?? 0
+          filledOnPurpose.add(d + '|' + p)
           await must('POST', 'maker_blocks', { work_item_id: id(N.conflito), user_id: target.id, day: d, period: p, minutes: capacity - taken })
           await dialog.getByRole('button', { name: 'Aceitar proposta' }).click()
           await dialog.getByRole('alert').filter({ hasText: 'Não foi gravado' }).filter({ hasText: 'Nada foi reservado' }).waitFor(T)
