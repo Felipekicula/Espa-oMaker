@@ -382,13 +382,13 @@ export function DashboardPage() {
 
         <div className="grid gap-6 xl:grid-cols-2">
           <AttentionCard tone="critical" icon={AlertTriangle} count={missed.length} title={missed.length === 1 ? 'bloco precisa de remanejamento' : 'blocos precisam de remanejamento'}
-            empty="Nenhum bloco vencido sem conclusão." to="/planejamento?filtro=missed" action="Remanejar no planejamento">
+            empty="Nenhum bloco vencido sem conclusão." to="/planejamento" action="Remanejar no planejamento">
             {missed.slice(0, 5).map(m => (
               <li key={m.block.id}><b>{m.item.title}</b><span>{nameOf(m.block.user_id)} · {formatDay(m.block.day)} · {m.block.period === 'manha' ? 'manhã' : 'tarde'} · {hours(m.block.minutes)}</span></li>
             ))}
           </AttentionCard>
           <AttentionCard tone="warning" icon={CalendarClock} count={short.length} title={short.length === 1 ? 'etapa sem reserva suficiente antes do prazo' : 'etapas sem reserva suficiente antes do prazo'}
-            empty="Todas as etapas com prazo e estimativa têm tempo reservado." to="/planejamento?filtro=pending" action="Reservar no planejamento">
+            empty="Todas as etapas com prazo e estimativa têm tempo reservado." to="/planejamento" action="Reservar no planejamento">
             {short.slice(0, 5).map(s => (
               <li key={s.item.id}><b>{s.item.title}</b><span>{nameOf(s.item.assignee_id)} · até {formatDay(s.deadline)} · {s.assessment}</span></li>
             ))}

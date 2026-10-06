@@ -21,3 +21,33 @@ test('suggestions distinguish after-deadline slots and unknown availability',()=
 test('known insufficient capacity produces an explicit does-not-fit alert',()=>{const slots=[...availability,{user_id:'f',weekday:1,period:'tarde',starts_at:'12:00',ends_at:'12:00'}];assert.match(p.itemAssessment(item({}),'2026-10-05',[],slots,[],now),/Não cabe/)})
 test('unknown availability cannot turn into a green promise',()=>assert.match(p.itemAssessment(item({remaining_minutes:60}),'2026-10-09',[block({day:'2026-10-06'})],[],[],now),/confirmar/))
 test('completed stage is separate from a missed block',()=>assert.equal(p.itemAssessment(item({status:'completed'}),'2026-10-05',[block({day:'2026-10-02'})],[],[],now),'Etapa concluída'))
+
+// Drag-and-drop preview rules (the database remains the authority).
+const boardSource = readFileSync(new URL('../src/utils/planningBoard.ts', import.meta.url), 'utf8')
+const board = await import('data:text/javascript;base64,' + Buffer.from(ts.transpileModule(boardSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText).toString('base64'))
+const facts = (over = {}) => ({ samePerson: true, sameSlot: false, ended: false, closed: false, capacity: 240, reserved: 0, events: [], ...over })
+
+test('unscheduled balance subtracts planned and pending-reschedule blocks only', () => {
+  const blocks = [
+    { work_item_id: 'a', minutes: 60, status: 'planned' }, { work_item_id: 'a', minutes: 30, status: 'needs_reschedule' },
+    { work_item_id: 'a', minutes: 120, status: 'superseded' }, { work_item_id: 'a', minutes: 120, status: 'cancelled' }, { work_item_id: 'b', minutes: 60, status: 'planned' },
+  ]
+  assert.equal(board.unscheduledMinutes(180, 'a', blocks), 90)
+  assert.equal(board.unscheduledMinutes(60, 'a', blocks), 0)
+  assert.equal(board.unscheduledMinutes(null, 'a', blocks), null)
+})
+test('dragging never changes the assignee and explains each refusal', () => {
+  assert.deepEqual(board.dropVerdict('block', 60, facts({ samePerson: false })), { ok: false, reason: 'Outro responsável', free: 240 })
+  assert.equal(board.dropVerdict('block', 60, facts({ sameSlot: true })).reason, 'Já está aqui')
+  assert.equal(board.dropVerdict('block', 60, facts({ ended: true, capacity: 0 })).reason, 'Período encerrado')
+  assert.equal(board.dropVerdict('item', 15, facts({ closed: true, capacity: 0 })).reason, 'Indisponível')
+  assert.equal(board.dropVerdict('block', 60, facts({ reserved: 240 })).reason, 'Sem horas livres')
+  assert.equal(board.dropVerdict('block', 120, facts({ reserved: 180 })).reason, 'Só 1h livres')
+  assert.equal(board.dropVerdict('item', 15, facts({ capacity: 0, events: ['Aula'] })).reason, 'Ocupado: Aula')
+  assert.match(board.dropVerdict('block', 180, facts({ capacity: 120, events: ['Reunião'] })).reason, /Só 2h livres · ocupado: reunião/)
+})
+test('a block must fit whole; a new reservation only needs some free time; unknown hours are flagged, not refused', () => {
+  assert.deepEqual(board.dropVerdict('block', 120, facts({ reserved: 120 })), { ok: true, free: 120 })
+  assert.deepEqual(board.dropVerdict('item', 15, facts({ reserved: 180 })), { ok: true, free: 60 })
+  assert.deepEqual(board.dropVerdict('block', 600, facts({ capacity: null })), { ok: true, free: null, warning: 'Horário não configurado' })
+})
