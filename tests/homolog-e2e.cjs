@@ -354,6 +354,10 @@ const hhmm = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${
           assert.equal(blocks.reduce((n, b) => n + b.minutes, 0), 660); assert.equal(blocks.filter(b => b.purpose === 'protecao').reduce((n, b) => n + b.minutes, 0), 120)
           const log = await must('GET', `maker_estimate_log?select=reason,work_minutes,protection_minutes&work_item_id=eq.${card.id}`)
           assert.deepEqual(log, [{ reason: 'inicial', work_minutes: 540, protection_minutes: 120 }])
+          const tamper = await rest('PATCH', `maker_estimate_log?work_item_id=eq.${card.id}`, { work_minutes: 1 }, 'return=representation')
+          const erase = await rest('DELETE', `maker_estimate_log?work_item_id=eq.${card.id}`, undefined, 'return=representation')
+          assert.equal(tamper.ok, false, 'o histórico não pode ser editado'); assert.equal(erase.ok, false, 'o histórico não pode ser apagado')
+          assert.deepEqual(await must('GET', `maker_estimate_log?select=reason,work_minutes,protection_minutes&work_item_id=eq.${card.id}`), log)
           assert.equal((await must('GET', `tickets?select=data_entrega&id=eq.${A.id}`))[0].data_entrega, prazo, 'aceitar reservas não altera o prazo oficial')
           await withinSlack(); return `9h + 2h de proteção em ${new Set(blocks.map(b => b.day + b.period)).size} períodos`
         })

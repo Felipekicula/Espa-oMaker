@@ -53,11 +53,16 @@ create index maker_time_off_day_idx on public.maker_time_off(day);
 do $$ declare t text; begin
   foreach t in array array['maker_estimate_log','maker_person_settings','maker_time_off'] loop
     execute format('alter table public.%I enable row level security',t);
+    -- O Supabase concede tudo a anon e authenticated em tabelas novas; aqui fica só o necessário.
+    execute format('revoke all on public.%I from anon, authenticated',t);
+  end loop;
+  foreach t in array array['maker_person_settings','maker_time_off'] loop
     execute format('create policy team_access on public.%I for all to authenticated using (exists (select 1 from public.app_users where id = auth.uid())) with check (exists (select 1 from public.app_users where id = auth.uid()))',t);
-    execute format('revoke all on public.%I from anon',t);
   end loop;
 end $$;
--- O histórico só recebe linhas novas: ninguém edita nem apaga pela API.
+-- O histórico só recebe linhas novas: não há política nem permissão para editar ou apagar.
+create policy team_read on public.maker_estimate_log for select to authenticated using (exists (select 1 from public.app_users where id = auth.uid()));
+create policy team_append on public.maker_estimate_log for insert to authenticated with check (exists (select 1 from public.app_users where id = auth.uid()));
 grant select, insert on public.maker_estimate_log to authenticated;
 grant select, insert, update on public.maker_person_settings to authenticated;
 grant select, insert, delete on public.maker_time_off to authenticated;

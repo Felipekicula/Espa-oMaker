@@ -16,6 +16,8 @@ async function setup() {
     create table public.tickets(id uuid primary key,status text); insert into public.tickets values('${t1}','em_producao'),('${t2}','em_producao'),('${t3}','em_producao');
     create table public.ticket_tasks(id bigserial primary key,ticket_id uuid references public.tickets, titulo text, responsavel_id uuid, status text);
     grant select on public.app_users, public.tickets to authenticated; grant select,update on public.ticket_tasks to authenticated;
+    -- Supabase grants everything on new public tables to these roles; migrations must not rely on a clean slate.
+    alter default privileges in schema public grant all on tables to anon, authenticated;
     set request.jwt.claim.sub='${ana}';`)
   await db.exec(sql('migration-maker-planning.sql'))
   await db.exec(sql('migration-maker-assisted-planning.sql'))
@@ -148,6 +150,8 @@ test('history is append-only and the new objects are closed to non-members and a
     const id = await accept(db, plan(t1, [{ day: mon, period: 'manha', minutes: 60 }]))
     await assert.rejects(() => db.query(`update maker_estimate_log set work_minutes=1 where work_item_id=$1`, [id]), /permission denied/)
     await assert.rejects(() => db.query(`delete from maker_estimate_log where work_item_id=$1`, [id]), /permission denied/)
+    await assert.rejects(() => db.query(`delete from maker_person_settings`), /permission denied/)
+    await assert.rejects(() => db.query(`update maker_time_off set reason='x'`), /permission denied/)
     await db.exec(`set request.jwt.claim.sub='${outsider}'`)
     assert.equal(await count(db, 'maker_estimate_log'), 0); assert.equal(await count(db, 'maker_time_off'), 0)
     await assert.rejects(() => accept(db, plan(t2, [{ day: tue, period: 'manha', minutes: 60 }])), /row-level security|violates/)
