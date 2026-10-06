@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { LayoutShell } from '../components/LayoutShell'
+import { ReportsLayout } from '../components/ReportsLayout'
 import type { Ticket } from '../types/ticket'
 import { listTickets } from '../services/tickets'
 import {
@@ -186,7 +186,7 @@ export function ReportsPage() {
   }
 
   return (
-    <LayoutShell>
+    <ReportsLayout>
       <section className="space-y-6">
         <header className="page-header">
           <h1>Indicadores do Espaço Maker</h1>
@@ -474,7 +474,7 @@ export function ReportsPage() {
           </div>
         )}
       </section>
-    </LayoutShell>
+    </ReportsLayout>
   )
 }
 

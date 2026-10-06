@@ -13,13 +13,11 @@ import { ReportsPage } from './screens/ReportsPage'
 import { FinancialReportsPage } from './screens/FinancialReportsPage'
 import { RelatorioMensalPage } from './screens/RelatorioMensalPage'
 import { SolicitarPage } from './screens/SolicitarPage'
-import { WhatsAppDemandsPage } from './screens/WhatsAppDemandsPage'
 import { FeedPage } from './screens/FeedPage'
-import { AgendaPage } from './screens/AgendaPage'
-import { EstoquePage } from './screens/EstoquePage'
-import { PrefeituraPage } from './screens/PrefeituraPage'
 import { CalculadoraConfigPage } from './screens/CalculadoraConfigPage'
 import { OrcamentoCalculadoraPage } from './screens/OrcamentoCalculadoraPage'
+import { PlanningPage } from './screens/PlanningPage'
+import { EventsPage } from './screens/EventsPage'
 import { isSupabaseConfigured } from './lib/supabaseClient'
 
 function App() {
@@ -103,14 +101,7 @@ function App() {
               </ProtectedRoute>
             }
           />
-          <Route
-            path="/demandas-whatsapp"
-            element={
-              <ProtectedRoute>
-                <WhatsAppDemandsPage />
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/demandas-whatsapp" element={<Navigate to="/demandas" replace />} />
 
           <Route
             path="/prontos"
@@ -155,31 +146,10 @@ function App() {
             }
           />
 
-          <Route
-            path="/agenda"
-            element={
-              <ProtectedRoute>
-                <AgendaPage />
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/agenda" element={<Navigate to="/planejamento" replace />} />
 
-          <Route
-            path="/estoque"
-            element={
-              <ProtectedRoute>
-                <EstoquePage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/prefeitura"
-            element={
-              <ProtectedRoute>
-                <PrefeituraPage />
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/estoque" element={<Navigate to="/" replace />} />
+          <Route path="/prefeitura" element={<Navigate to="/" replace />} />
           <Route
             path="/orcamento"
             element={
@@ -197,6 +167,8 @@ function App() {
             }
           />
 
+          <Route path="/planejamento" element={<ProtectedRoute><PlanningPage /></ProtectedRoute>} />
+          <Route path="/eventos" element={<ProtectedRoute><EventsPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
