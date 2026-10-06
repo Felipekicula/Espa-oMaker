@@ -54,3 +54,5 @@ Metas internas não mudam o prazo oficial. Para avaliar a etapa, usa-se a menor 
 - Nenhuma migração nem escrita foi executada no banco de produção durante o desenvolvimento. Publicação depende de acesso autenticado ao GitHub e ao projeto Supabase correto.
 
 Para repetir o smoke test de interface: instalar Playwright no ambiente de teste (`npm install --no-save playwright`; `npx playwright install chromium`) e executar `node tests/ui-smoke.cjs`. O próprio script inicia o Vite com um Supabase fictício e intercepta requisições; não usar credenciais de produção.
+
+Para montar um Supabase de homologação e rodar o teste opcional contra o banco real (`npm run test:homolog`), veja `docs/HOMOLOGACAO.md`.

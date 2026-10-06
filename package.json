@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "test:homolog": "node tests/homolog-e2e.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",
