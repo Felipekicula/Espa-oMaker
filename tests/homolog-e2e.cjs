@@ -342,11 +342,14 @@ const hhmm = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${
         await dialog.getByLabel('Responsável').selectOption(target.id); await dialog.getByLabel('Não começar antes de').fill(wd(7))
       }
       const proposalRegion = dialog.getByRole('region', { name: 'Proposta' })
+      const openScenarios = async () => { const d = proposalRegion.locator('details.planner-compare'); if ((await d.getAttribute('open')) === null) await d.locator('summary').click() }
       if (!C) record('Planejamento assistido', null, 'faltam demandas fictícias em aberto sem etapas para o teste')
       else {
         await step('Assistido: a proposta não grava nada; ao aceitar, cartão, blocos e histórico entram juntos', async () => {
           const prazo = (await must('GET', `tickets?select=data_entrega&id=eq.${A.id}`))[0].data_entrega
           await openPlanner(A); await dialog.getByLabel('Trabalho previsto · horas').fill('9')
+          assert.equal(await dialog.getByLabel(/Permitir que esta proposta use a folga protegida/).isChecked(), false)
+          await proposalRegion.locator('.planner-headline b').first().waitFor(T); await openScenarios()
           assert.deepEqual(await proposalRegion.locator('.planner-table tbody tr td:first-child').allInnerTexts(), ['Só a estimativa', 'Com a margem', 'Com a margem e a folga'])
           assert.equal(await cardOf(A), undefined, 'nada no banco antes do aceite')
           await dialog.getByRole('button', { name: 'Aceitar proposta' }).click(); await notice.filter({ hasText: 'Proposta aceita: ' + A.titulo }).filter({ hasText: 'O prazo oficial não foi alterado' }).waitFor(T)
@@ -370,7 +373,7 @@ const hhmm = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${
         })
         await step('Assistido: "não sei ainda" com conflito de outra sessão não grava nada; depois reserva só a investigação', async () => {
           await openPlanner(C); await dialog.getByLabel('Não sei ainda').check()
-          await proposalRegion.getByText('Sem previsão de conclusão:').waitFor(T); assert.equal(await proposalRegion.locator('.planner-table').count(), 0)
+          await proposalRegion.locator('.planner-headline', { hasText: 'Sem previsão' }).waitFor(T); assert.equal(await proposalRegion.locator('.planner-table').count(), 0)
           await dialog.getByLabel('Revisar a estimativa em').fill(today)
           const label = await proposalRegion.locator('.planner-blocks li span').first().innerText(), [dayBr, per] = label.split(' · ')
           const d = dayBr.split('/').reverse().join('-'), p = per === 'manhã' ? 'manha' : 'tarde'
@@ -393,6 +396,7 @@ const hhmm = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${
           await side.locator('.board-item.review', { hasText: C.titulo }).click(); await dialog.getByRole('button', { name: 'Definir estimativa' }).click()
           await dialog.getByLabel('Tenho uma faixa').check(); await dialog.getByLabel('Não começar antes de').fill(wd(7))
           await dialog.getByLabel('Cenário menor · horas').fill('3'); await dialog.getByLabel('Cenário maior · horas').fill('5')
+          assert.equal(await proposalRegion.locator('.planner-headline').count(), 2); await openScenarios()
           assert.deepEqual(await proposalRegion.locator('.planner-table tbody tr td:first-child').allInnerTexts(), ['Se for o cenário menor', 'Se for o cenário maior'])
           await dialog.getByRole('button', { name: 'Aceitar proposta' }).click(); await notice.filter({ hasText: 'Proposta aceita: ' + C.titulo }).waitFor(T)
           const card = await cardOf(C), blocks = await blocksOf(card.id), active = blocks.filter(b => b.status === 'planned')

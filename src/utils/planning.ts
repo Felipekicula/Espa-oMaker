@@ -11,7 +11,8 @@ export function dateAdd(day: string, count: number): string {
 export function weekday(day: string): number { return new Date(day + 'T12:00:00Z').getUTCDay() }
 export function mondayOf(day: string): string { return dateAdd(day, -((weekday(day) + 6) % 7)) }
 export function formatDay(day: string): string { return new Date(day + 'T12:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) }
-export function hours(minutes: number): string { return `${(minutes / 60).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}h` }
+/** 435 -> "7h15", 120 -> "2h", 45 -> "45min". */
+export function hours(minutes: number): string { const total = Math.round(minutes), whole = Math.floor(total / 60), rest = total % 60; return whole === 0 && rest ? `${rest}min` : `${whole}h${rest ? String(rest).padStart(2, '0') : ''}` }
 export function isMissed(block: PlanningBlock, availability: Availability[], now = new Date()): boolean {
   if (block.status === 'needs_reschedule') return true
   if (block.status !== 'planned') return false

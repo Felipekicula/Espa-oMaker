@@ -39,7 +39,7 @@ export interface DropVerdict {
   warning?: string
 }
 
-function h(minutes: number): string { return `${(minutes / 60).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}h` }
+function h(minutes: number): string { const total = Math.round(minutes), whole = Math.floor(total / 60), rest = total % 60; return whole === 0 && rest ? `${rest}min` : `${whole}h${rest ? String(rest).padStart(2, '0') : ''}` }
 
 /**
  * kind 'block': mover um bloco de duração fixa. kind 'item': nova reserva, cuja duração é perguntada depois.
