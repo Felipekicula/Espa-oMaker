@@ -95,7 +95,7 @@ export function PlanningPage() {
     const withoutClock = availableMinutes(slot.userId, slot.day, slot.period, data.availability, data.events)
     const capacity = availableMinutes(slot.userId, slot.day, slot.period, data.availability, data.events, now)
     const reserved = reservedMinutes(activeBlocks, slot.userId, slot.day, slot.period, excludeBlockId)
-    const events = data.events.filter(e => e.status === 'confirmed' && e.day === slot.day && e.participant_ids.includes(slot.userId) && (slot.period === 'manha' ? e.starts_at < '12:00' : e.ends_at > '12:00'))
+    const events = data.events.filter(e => e.status === 'confirmed' && e.day === slot.day && e.participant_ids.includes(slot.userId) && (slot.period === 'manha' ? timeMinutes(e.starts_at) < 720 : timeMinutes(e.ends_at) > 720))
     return { closed, total, ended, withoutClock, capacity, reserved, events }
   }
   function verdictFor(c: Carry, slot: Slot): DropVerdict {

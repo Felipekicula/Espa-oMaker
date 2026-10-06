@@ -21,7 +21,7 @@ const shot = name => path.join(os.tmpdir(), name)
   await page.addInitScript(({ token, user }) => localStorage.setItem('sb-test-auth-token', JSON.stringify({ access_token: token, refresh_token: 'mock', expires_at: Math.floor(Date.now() / 1000) + 86400, expires_in: 86400, token_type: 'bearer', user: { id: user, email: 'felipe@ctp.test', aud: 'authenticated', role: 'authenticated', user_metadata: { name: 'Felipe' } } })), { token, user })
 
   const users = [{ id: user, name: 'Felipe', role: 'felipe', can_access_feed: true }, { id: other, name: 'Manu', role: 'executor', can_access_feed: true }]
-  const events = [{ id: 'e1', title: 'Aula de teste', kind: 'aula', day: week(2), starts_at: '08:00', ends_at: '12:00', participant_ids: [user, other], preparation_deadline: null, status: 'confirmed', location: 'Maker', series_id: null }]
+  const events = [{ id: 'e1', title: 'Aula de teste', kind: 'aula', day: week(2), starts_at: '08:00:00', ends_at: '12:00:00', participant_ids: [user, other], preparation_deadline: null, status: 'confirmed', location: 'Maker', series_id: null }]
   const items = [
     { id: 'i1', title: 'Modelar suporte', ticket_id: ticket, event_id: null, ticket_task_id: 1, assignee_id: user, remaining_minutes: 180, due_date: null, status: 'pending' },
     { id: 'i2', title: 'Imprimir peças', ticket_id: ticket, event_id: null, ticket_task_id: null, assignee_id: user, remaining_minutes: 240, due_date: null, status: 'pending' },
@@ -31,7 +31,7 @@ const shot = name => path.join(os.tmpdir(), name)
     { id: 'b1', work_item_id: 'i1', user_id: user, day: plus(-7, monday), period: 'tarde', minutes: 180, status: 'planned', predecessor_id: null },
     { id: 'b3', work_item_id: 'i3', user_id: other, day: week(1), period: 'manha', minutes: 120, status: 'planned', predecessor_id: null },
   ]
-  const availability = users.flatMap(u => [1, 2, 3, 4, 5].flatMap(weekday => ['manha', 'tarde'].map(period => ({ user_id: u.id, weekday, period, starts_at: period === 'manha' ? '08:00' : '13:00', ends_at: period === 'manha' ? '12:00' : '17:00' }))))
+  const availability = users.flatMap(u => [1, 2, 3, 4, 5].flatMap(weekday => ['manha', 'tarde'].map(period => ({ user_id: u.id, weekday, period, starts_at: period === 'manha' ? '08:00:00' : '13:00:00', ends_at: period === 'manha' ? '12:00:00' : '17:00:00' }))))
   const tickets = [{ id: ticket, titulo: 'Rover de teste', tipo: 'interna', origem: 'interno', categoria: 'engenharia', prioridade: 'media', status: 'em_producao', responsavel_id: user, data_criacao: today, data_entrega: week(11), responsavel: { id: user, name: 'Felipe' } }]
   const calls = []; let failNext = null, serial = 10
   await page.route('https://test.supabase.co/**', async route => {
@@ -79,6 +79,7 @@ const shot = name => path.join(os.tmpdir(), name)
   assert.equal(await side.getByText('Montar kit').count(), 0, 'etapa totalmente reservada não fica na lista')
   await page.getByRole('button', { name: 'Próxima semana' }).click()
   await slot('Felipe', week(2), 'manhã').getByText('Aula: Aula de teste').waitFor() // ocupação fixa
+  assert.equal(await slot('Felipe', week(2), 'tarde').locator('.board-fixed').count(), 0, 'aula que termina ao meio-dia não ocupa a tarde')
   await page.screenshot({ path: shot('ctp-planning-desktop.png'), fullPage: true })
 
   // 1. Arrastar etapa -> pergunta a duração -> reserva parcial mantém o saldo na lista.
