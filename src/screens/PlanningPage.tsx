@@ -16,7 +16,7 @@ export function PlanningPage() {
   const [params] = useSearchParams()
   const [week, setWeek] = useState(mondayOf(today()))
   const [person, setPerson] = useState('')
-  const [filter, setFilter] = useState('all')
+  const [filter, setFilter] = useState(['pending','missed','nodate'].includes(params.get('filtro') || '') ? params.get('filtro')! : 'all')
   const [eventFilter, setEventFilter] = useState(params.get('evento') || '')
   const [search, setSearch] = useState('')
   const [dialog, setDialog] = useState<'item' | 'reserve' | 'continue' | 'availability' | null>(null)

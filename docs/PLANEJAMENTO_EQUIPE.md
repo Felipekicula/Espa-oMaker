@@ -6,7 +6,9 @@ Implementação em `feat/planejamento-equipe-eventos`, baseada no commit `dd9e4c
 
 - Menu: Principal, Operações, Gestão e Financeiro, na ordem validada com Felipe.
 - Agenda antiga redireciona para Planejamento; WhatsApp para Todas as demandas. Estoque e Prefeitura deixam de ter rotas acessíveis. Nenhuma tabela ou pedido desses módulos é removido.
-- Dashboard: visão geral, distribuição por status, cartões visuais, fila e alertas existentes. Dados paginados integralmente, em vez do limite antigo de 200; nenhuma regra financeira alterada.
+- Dashboard: leitura visual com filtros de período e responsável. Cards (em aberto, entregues no período, atrasadas, % de entregas no prazo), entregas por semana/mês, pontualidade, em aberto por etapa, demandas por responsável, capacidade da equipe nos próximos 10 dias úteis e alertas do planejamento. Clicar em um indicador abre a lista correspondente. Fila ativa e alertas rápidos continuam na tela. Dados paginados integralmente, em vez do limite antigo de 200; nenhuma regra financeira alterada.
+- Entregas e pontualidade usam `tickets.entregue_em`, gravado por gatilho quando o status passa para Entregue (`supabase/migration-ticket-entregue-em.sql`). Antes dessa migração o sistema não registrava a data da entrega: demandas entregues anteriormente ficam sem data, aparecem separadas e não entram nos gráficos nem no percentual. "Pronta" não conta como entregue, e `updated_at` não é usado. A pontualidade compara com o prazo atualmente cadastrado, pois não há histórico de alterações de prazo; entregas sem prazo ficam fora do cálculo, e o card mostra quantas entraram.
+- Capacidade no Dashboard usa só horários configurados, aulas/eventos e reservas do planejamento. Períodos sem horário configurado aparecem como disponibilidade desconhecida. Cronômetros não entram.
 - Relatórios: um menu com Indicadores gerais, Financeiro e Relatório mensal. Cálculos, filtros e exportações existentes preservados.
 - Eventos: cadastro direto, participantes, horários, local, preparação e de 1 a 52 ocorrências semanais. Cada ocorrência tem suas etapas. Um conflito desfaz o cadastro inteiro. Cancelamento vale apenas para a ocorrência escolhida e libera seus blocos de preparação.
 - Planejamento: linhas por pessoa, manhã/tarde, múltiplos blocos no mesmo período e vários dias para a mesma etapa. As tarefas existentes também são listadas quando ainda não estão no planejamento, inclusive tarefas de um projeto de outra pessoa.
@@ -21,7 +23,7 @@ Implementação em `feat/planejamento-equipe-eventos`, baseada no commit `dd9e4c
 ## Instalação
 
 1. Obter checkout atualizado do repositório e aplicar esta branch/patch. Resolver eventuais mudanças posteriores à base antes de publicar.
-2. Em um ambiente de homologação Supabase com `schema.sql` e `migration-ticket-tasks.sql`, aplicar **uma vez** `supabase/migration-maker-planning.sql`. A migração cria tabelas/funções/triggers próprios, não apaga demandas nem modifica campos financeiros. Se uma instrução falhar, a transação é revertida.
+2. Em um ambiente de homologação Supabase com `schema.sql` e `migration-ticket-tasks.sql`, aplicar **uma vez** `supabase/migration-maker-planning.sql`. A migração cria tabelas/funções/triggers próprios, não apaga demandas nem modifica campos financeiros. Se uma instrução falhar, a transação é revertida. Aplicar também `supabase/migration-ticket-entregue-em.sql` (aditiva e reexecutável: uma coluna e um gatilho em `tickets`); sem ela o Dashboard abre normalmente, mas avisa que entregas por período e pontualidade estão indisponíveis.
 3. Manter as variáveis existentes `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`. Nunca colocar service-role no frontend.
 4. Executar `npm ci`, `npm test` e `npm run build`.
 5. Confirmar o teste com dois membros da equipe no ambiente de homologação; publicar o frontend depois da migração aprovada.
